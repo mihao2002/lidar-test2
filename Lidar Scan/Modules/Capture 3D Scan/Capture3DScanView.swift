@@ -69,6 +69,7 @@ struct Capture3DScanView: View {
                             print("Cancelled")
                             pauseSession = false
                         }
+                    } label: {
                         Text("Export & Overlay")
                             .frame(width: UIScreen.main.bounds.width-120)
                             .padding()
