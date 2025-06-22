@@ -12,12 +12,14 @@ struct Capture3DScanView: View {
     @State var submittedExportRequest = false
     @State var submittedName = ""
     @State var pauseSession: Bool = false
+    @State var overlayExportedMesh: Bool = false
     var body: some View {
         NavigationView {
             ZStack(alignment: .bottom) {
                 ARWrapperView(submittedExportRequest: $submittedExportRequest,
                               submittedName: $submittedName,
-                              pauseSession: $pauseSession)
+                              pauseSession: $pauseSession,
+                              overlayExportedMesh: $overlayExportedMesh)
                 .ignoresSafeArea()
                 VStack {
                     HStack {
@@ -52,6 +54,25 @@ struct Capture3DScanView: View {
                             .frame(width: UIScreen.main.bounds.width-120)
                             .padding()
                             .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    Button {
+                        pauseSession = true
+                        alertView(title: "Save File",
+                                  message: "Enter your file name",
+                                  hintText: "file name") { text in
+                            submittedName = text
+                            overlayExportedMesh.toggle()
+                            self.mode.wrappedValue.dismiss()
+                        } secondaryAction: {
+                            print("Cancelled")
+                            pauseSession = false
+                        }
+                        Text("Export & Overlay")
+                            .frame(width: UIScreen.main.bounds.width-120)
+                            .padding()
+                            .background(Color.green)
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }

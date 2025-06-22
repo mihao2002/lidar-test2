@@ -13,6 +13,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedExportRequest: Bool
     @Binding var submittedName: String
     @Binding var pauseSession: Bool
+    @Binding var overlayExportedMesh: Bool
     let arView = ARView(frame: .zero)
     func makeUIView(context: Context) -> ARView {
         return arView
@@ -36,6 +37,9 @@ struct ARWrapperView: UIViewRepresentable {
                 print("No mesh anchors found or asset conversion failed.")
             }
         }
+        if overlayExportedMesh {
+            overlayMostRecentOBJMesh()
+        }
         if pauseSession {
             arView.session.pause()
         } else {
@@ -54,6 +58,61 @@ struct ARWrapperView: UIViewRepresentable {
     }
     private func setARViewOptions(_ arView: ARView) {
         arView.debugOptions.insert(.showSceneUnderstanding)
+    }
+    private func overlayMostRecentOBJMesh() {
+        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let folderName = "OBJ_FILES"
+        let folderURL = documentsDirectory.appendingPathComponent(folderName)
+        do {
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles)
+            let objFiles = fileURLs.filter { $0.pathExtension == "obj" }
+            guard let mostRecent = objFiles.sorted(by: { (a, b) -> Bool in
+                let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+                let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
+                return aDate > bDate
+            }).first else { return }
+            if let entity = parseOBJToModelEntity(url: mostRecent) {
+                let anchor = AnchorEntity(world: matrix_identity_float4x4)
+                anchor.addChild(entity)
+                arView.scene.anchors.append(anchor)
+            }
+        } catch {
+            print("Failed to overlay OBJ mesh: \(error)")
+        }
+    }
+    private func parseOBJToModelEntity(url: URL) -> ModelEntity? {
+        do {
+            let content = try String(contentsOf: url)
+            var positions: [SIMD3<Float>] = []
+            var indices: [UInt32] = []
+            for line in content.components(separatedBy: .newlines) {
+                let parts = line.split(separator: " ")
+                if parts.count > 0 {
+                    if parts[0] == "v" && parts.count >= 4 {
+                        if let x = Float(parts[1]), let y = Float(parts[2]), let z = Float(parts[3]) {
+                            positions.append([x, y, z])
+                        }
+                    } else if parts[0] == "f" && parts.count >= 4 {
+                        for i in 1...3 {
+                            let vertex = parts[i].split(separator: "/")[0]
+                            if let idx = Int(vertex), idx > 0 {
+                                indices.append(UInt32(idx - 1))
+                            }
+                        }
+                    }
+                }
+            }
+            guard !positions.isEmpty && !indices.isEmpty else { return nil }
+            var meshDesc = MeshDescriptor()
+            meshDesc.positions = MeshBuffer(positions)
+            meshDesc.primitives = .triangles(indices)
+            let mesh = try MeshResource.generate(from: [meshDesc])
+            let material = SimpleMaterial(color: .green, isMetallic: false)
+            return ModelEntity(mesh: mesh, materials: [material])
+        } catch {
+            print("OBJ parse error: \(error)")
+            return nil
+        }
     }
 }
 
