@@ -42,14 +42,14 @@ struct ARViewContainer: UIViewRepresentable {
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         arView.automaticallyConfigureSession = false
         if !modelLoaded {
-            loadMostRecentUSDZModel(arView: arView)
+            loadMostRecentOBJModel(arView: arView)
         }
         return arView
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
 
-    func loadMostRecentUSDZModel(arView: ARView) {
+    func loadMostRecentOBJModel(arView: ARView) {
         guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             alertMessage = "Could not access documents directory."
             showAlert = true
@@ -59,32 +59,65 @@ struct ARViewContainer: UIViewRepresentable {
         let folderURL = documentsDirectory.appendingPathComponent(folderName)
         do {
             let fileURLs = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles)
-            let usdzFiles = fileURLs.filter { $0.pathExtension == "usdz" }
-            guard let mostRecent = usdzFiles.sorted(by: { (a, b) -> Bool in
+            let objFiles = fileURLs.filter { $0.pathExtension == "obj" }
+            guard let mostRecent = objFiles.sorted(by: { (a, b) -> Bool in
                 let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
                 let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
                 return aDate > bDate
             }).first else {
-                alertMessage = "No USDZ files found."
+                alertMessage = "No OBJ files found."
                 showAlert = true
                 return
             }
-            let cancellable = Entity.loadModelAsync(contentsOf: mostRecent)
-                .sink(receiveCompletion: { completion in
-                    if case .failure(let error) = completion {
-                        alertMessage = "Failed to load USDZ model: \(error.localizedDescription)"
-                        showAlert = true
-                    }
-                }, receiveValue: { entity in
-                    let anchor = AnchorEntity(world: SIMD3<Float>(0, 0, -0.5))
-                    anchor.addChild(entity)
-                    arView.scene.anchors.append(anchor)
-                    modelLoaded = true
-                })
-            _ = cancellable
+            if let entity = parseOBJToModelEntity(url: mostRecent) {
+                let anchor = AnchorEntity(world: SIMD3<Float>(0, 0, -0.5))
+                anchor.addChild(entity)
+                arView.scene.anchors.append(anchor)
+                modelLoaded = true
+            } else {
+                alertMessage = "Failed to parse OBJ file."
+                showAlert = true
+            }
         } catch {
-            alertMessage = "Failed to load USDZ files: \(error.localizedDescription)"
+            alertMessage = "Failed to load OBJ files: \(error.localizedDescription)"
             showAlert = true
+        }
+    }
+
+    // Simple OBJ parser for vertices and faces (triangles only)
+    func parseOBJToModelEntity(url: URL) -> ModelEntity? {
+        do {
+            let content = try String(contentsOf: url)
+            var positions: [SIMD3<Float>] = []
+            var indices: [UInt32] = []
+            for line in content.components(separatedBy: .newlines) {
+                let parts = line.split(separator: " ")
+                if parts.count > 0 {
+                    if parts[0] == "v" && parts.count >= 4 {
+                        if let x = Float(parts[1]), let y = Float(parts[2]), let z = Float(parts[3]) {
+                            positions.append([x, y, z])
+                        }
+                    } else if parts[0] == "f" && parts.count >= 4 {
+                        // Only handle triangles (f v1 v2 v3)
+                        for i in 1...3 {
+                            let vertex = parts[i].split(separator: "/")[0]
+                            if let idx = Int(vertex), idx > 0 {
+                                indices.append(UInt32(idx - 1))
+                            }
+                        }
+                    }
+                }
+            }
+            guard !positions.isEmpty && !indices.isEmpty else { return nil }
+            var meshDesc = MeshDescriptor()
+            meshDesc.positions = MeshBuffer(positions)
+            meshDesc.primitives = .triangles(indices)
+            let mesh = try MeshResource.generate(from: [meshDesc])
+            let material = SimpleMaterial(color: .green, isMetallic: false)
+            return ModelEntity(mesh: mesh, materials: [material])
+        } catch {
+            print("OBJ parse error: \(error)")
+            return nil
         }
     }
 } 

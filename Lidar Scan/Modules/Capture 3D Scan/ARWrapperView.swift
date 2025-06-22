@@ -74,7 +74,7 @@ class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let folderName = "OBJ_FILES"
         let folderURL = directory.appendingPathComponent(folderName)
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
-        let url = folderURL.appendingPathComponent("\(fileName.isEmpty ? UUID().uuidString : fileName).usdz")
+        let url = folderURL.appendingPathComponent("\(fileName.isEmpty ? UUID().uuidString : fileName).obj")
         print("Exporting to: \(url)")
         do {
             try asset.export(to: url)
