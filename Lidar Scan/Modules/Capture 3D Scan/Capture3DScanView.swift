@@ -59,16 +59,9 @@ struct Capture3DScanView: View {
                     }
                     Button {
                         pauseSession = true
-                        alertView(title: "Save File",
-                                  message: "Enter your file name",
-                                  hintText: "file name") { text in
-                            submittedName = text
-                            overlayExportedMesh.toggle()
-                            self.mode.wrappedValue.dismiss()
-                        } secondaryAction: {
-                            print("Cancelled")
-                            pauseSession = false
-                        }
+                        let randomName = UUID().uuidString
+                        submittedName = randomName
+                        overlayExportedMesh.toggle()
                     } label: {
                         Text("Export & Overlay")
                             .frame(width: UIScreen.main.bounds.width-120)
