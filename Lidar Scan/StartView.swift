@@ -11,6 +11,7 @@ import ARKit
 struct StartView: View {
     @State var shouldNavigateToScanView: Bool = false
     @State var shouldNavigateToViewList: Bool = false
+    @State var shouldNavigateToOverlay: Bool = false
     func isLidarCapable() -> Bool {
         let supportLiDAR = ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
         guard supportLiDAR else {
@@ -43,6 +44,16 @@ struct StartView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }
+                    Button {
+                        shouldNavigateToOverlay = true
+                    } label: {
+                        Text("Overlay Model")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
                 }
                 .padding()
                 .navigationDestination(isPresented: $shouldNavigateToScanView) {
@@ -50,6 +61,9 @@ struct StartView: View {
                 }
                 .navigationDestination(isPresented: $shouldNavigateToViewList) {
                     View3DScansView().navigationBarHidden(true)
+                }
+                .navigationDestination(isPresented: $shouldNavigateToOverlay) {
+                    OverlayModelView().navigationBarHidden(true)
                 }
             } else {
                 VStack(alignment: .center) {
