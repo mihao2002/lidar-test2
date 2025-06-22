@@ -27,19 +27,6 @@ struct OverlayModelView: View {
             Alert(title: Text("Error"), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
     }
-
-    func loadTransform(for objURL: URL) -> simd_float4x4? {
-        let transformURL = objURL.deletingPathExtension().appendingPathExtension("_transform.json")
-        guard let data = try? Data(contentsOf: transformURL),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [Float],
-              array.count == 16 else { return nil }
-        return simd_float4x4(
-            SIMD4<Float>(array[0], array[1], array[2], array[3]),
-            SIMD4<Float>(array[4], array[5], array[6], array[7]),
-            SIMD4<Float>(array[8], array[9], array[10], array[11]),
-            SIMD4<Float>(array[12], array[13], array[14], array[15])
-        )
-    }
 }
 
 struct ARViewContainer: UIViewRepresentable {
@@ -61,6 +48,19 @@ struct ARViewContainer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
+
+    func loadTransform(for objURL: URL) -> simd_float4x4? {
+        let transformURL = objURL.deletingPathExtension().appendingPathExtension("_transform.json")
+        guard let data = try? Data(contentsOf: transformURL),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Float],
+              array.count == 16 else { return nil }
+        return simd_float4x4(
+            SIMD4<Float>(array[0], array[1], array[2], array[3]),
+            SIMD4<Float>(array[4], array[5], array[6], array[7]),
+            SIMD4<Float>(array[8], array[9], array[10], array[11]),
+            SIMD4<Float>(array[12], array[13], array[14], array[15])
+        )
+    }
 
     func loadMostRecentOBJModel(arView: ARView) {
         guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
