@@ -28,7 +28,7 @@ struct ARWrapperView: UIViewRepresentable {
             if !meshAnchors.isEmpty, let asset = viewModel.convertToAsset(meshAnchor: meshAnchors, camera: camera) {
                 do {
                     print("Attempting export...")
-                    try ExportViewModel().export(asset: asset, fileName: submittedName, cameraTransform: camera.transform)
+                    try ExportViewModel().export(asset: asset, fileName: submittedName)
                 } catch {
                     print("Export Failed: \(error)")
                 }
@@ -67,31 +67,18 @@ class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
         }
         return asset
     }
-    func export(asset: MDLAsset, fileName: String, cameraTransform: simd_float4x4) throws {
+    func export(asset: MDLAsset, fileName: String) throws {
         guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw NSError(domain: "com.original.creatingLidarModel", code: 153)
         }
         let folderName = "OBJ_FILES"
         let folderURL = directory.appendingPathComponent(folderName)
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
-        let baseName = fileName.isEmpty ? UUID().uuidString : fileName
-        let url = folderURL.appendingPathComponent("\(baseName).obj")
+        let url = folderURL.appendingPathComponent("\(fileName.isEmpty ? UUID().uuidString : fileName).obj")
         print("Exporting to: \(url)")
         do {
             try asset.export(to: url)
             print("Object saved successfully at \(url)")
-            // Save transform as JSON
-            let transform = cameraTransform
-            let transformArray = [
-                transform.columns.0.x, transform.columns.0.y, transform.columns.0.z, transform.columns.0.w,
-                transform.columns.1.x, transform.columns.1.y, transform.columns.1.z, transform.columns.1.w,
-                transform.columns.2.x, transform.columns.2.y, transform.columns.2.z, transform.columns.2.w,
-                transform.columns.3.x, transform.columns.3.y, transform.columns.3.z, transform.columns.3.w
-            ]
-            let transformURL = folderURL.appendingPathComponent("\(baseName)_transform.json")
-            let jsonData = try? JSONSerialization.data(withJSONObject: transformArray)
-            try? jsonData?.write(to: transformURL)
-            print("Transform saved at \(transformURL)")
         } catch {
             print("Export error: \(error)")
         }
