@@ -75,6 +75,7 @@ struct ARWrapperView: UIViewRepresentable {
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(entity)
                 arView.scene.anchors.append(anchor)
+                addCoordinateAxes()
             }
         } catch {
             print("Failed to overlay OBJ mesh: \(error)")
@@ -113,6 +114,30 @@ struct ARWrapperView: UIViewRepresentable {
             print("OBJ parse error: \(error)")
             return nil
         }
+    }
+    private func addCoordinateAxes() {
+        let axisLength: Float = 0.1 // 10cm
+        
+        // X-axis (Red)
+        let xAxis = ModelEntity(mesh: .generateBox(size: [axisLength, 0.002, 0.002]))
+        xAxis.model?.materials = [SimpleMaterial(color: .red, isMetallic: false)]
+        xAxis.position = [axisLength/2, 0, 0]
+        
+        // Y-axis (Green) 
+        let yAxis = ModelEntity(mesh: .generateBox(size: [0.002, axisLength, 0.002]))
+        yAxis.model?.materials = [SimpleMaterial(color: .green, isMetallic: false)]
+        yAxis.position = [0, axisLength/2, 0]
+        
+        // Z-axis (Blue)
+        let zAxis = ModelEntity(mesh: .generateBox(size: [0.002, 0.002, axisLength]))
+        zAxis.model?.materials = [SimpleMaterial(color: .blue, isMetallic: false)]
+        zAxis.position = [0, 0, axisLength/2]
+        
+        let axesAnchor = AnchorEntity(world: matrix_identity_float4x4)
+        axesAnchor.addChild(xAxis)
+        axesAnchor.addChild(yAxis)
+        axesAnchor.addChild(zAxis)
+        arView.scene.anchors.append(axesAnchor)
     }
 }
 
