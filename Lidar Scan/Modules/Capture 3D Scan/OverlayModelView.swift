@@ -6,12 +6,11 @@ struct OverlayModelView: View {
     @Environment(\.presentationMode) var mode: Binding<PresentationMode>
     @State private var showAlert = false
     @State private var alertMessage = ""
-    @State private var arView = ARView(frame: .zero)
     @State private var modelLoaded = false
     
     var body: some View {
         ZStack(alignment: .topLeading) {
-            ARViewContainer(arView: $arView, modelLoaded: $modelLoaded, showAlert: $showAlert, alertMessage: $alertMessage)
+            ARViewContainer(modelLoaded: $modelLoaded, showAlert: $showAlert, alertMessage: $alertMessage)
                 .edgesIgnoringSafeArea(.all)
             Button(action: {
                 self.mode.wrappedValue.dismiss()
@@ -31,26 +30,26 @@ struct OverlayModelView: View {
 }
 
 struct ARViewContainer: UIViewRepresentable {
-    @Binding var arView: ARView
     @Binding var modelLoaded: Bool
     @Binding var showAlert: Bool
     @Binding var alertMessage: String
 
     func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         config.environmentTexturing = .automatic
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         arView.automaticallyConfigureSession = false
         if !modelLoaded {
-            loadMostRecentUSDZModel()
+            loadMostRecentUSDZModel(arView: arView)
         }
         return arView
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {}
 
-    func loadMostRecentUSDZModel() {
+    func loadMostRecentUSDZModel(arView: ARView) {
         guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             alertMessage = "Could not access documents directory."
             showAlert = true
@@ -82,7 +81,6 @@ struct ARViewContainer: UIViewRepresentable {
                     arView.scene.anchors.append(anchor)
                     modelLoaded = true
                 })
-            // Store cancellable if you want to keep it alive
             _ = cancellable
         } catch {
             alertMessage = "Failed to load USDZ files: \(error.localizedDescription)"
