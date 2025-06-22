@@ -22,14 +22,18 @@ struct ARWrapperView: UIViewRepresentable {
         setARViewOptions(arView)
         let configuration = buildConfigure()
         if submittedExportRequest {
-            guard let camera = arView.session.currentFrame?.camera else { return }
-            if let meshAnchors = arView.session.currentFrame?.anchors.compactMap( { $0 as? ARMeshAnchor }),
-               let asset = viewModel.convertToAsset(meshAnchor: meshAnchors, camera: camera) {
+            guard let camera = arView.session.currentFrame?.camera else { print("No camera found"); return }
+            let meshAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
+            print("Mesh anchors found: \(meshAnchors.count)")
+            if !meshAnchors.isEmpty, let asset = viewModel.convertToAsset(meshAnchor: meshAnchors, camera: camera) {
                 do {
+                    print("Attempting export...")
                     try ExportViewModel().export(asset: asset, fileName: submittedName)
                 } catch {
-                    print("Export Failed")
+                    print("Export Failed: \(error)")
                 }
+            } else {
+                print("No mesh anchors found or asset conversion failed.")
             }
         }
         if pauseSession {
@@ -71,11 +75,12 @@ class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let folderURL = directory.appendingPathComponent(folderName)
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
         let url = folderURL.appendingPathComponent("\(fileName.isEmpty ? UUID().uuidString : fileName).usdz")
+        print("Exporting to: \(url)")
         do {
             try asset.export(to: url)
             print("Object saved successfully at \(url)")
         } catch {
-            print(error)
+            print("Export error: \(error)")
         }
     }
 }
