@@ -58,7 +58,6 @@ struct Capture3DScanView: View {
                             .cornerRadius(10)
                     }
                     Button {
-                        pauseSession = true
                         let randomName = UUID().uuidString
                         submittedName = randomName
                         overlayExportedMesh.toggle()
