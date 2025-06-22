@@ -70,7 +70,8 @@ struct ARViewContainer: UIViewRepresentable {
                 return
             }
             if let entity = parseOBJToModelEntity(url: mostRecent) {
-                let anchor = AnchorEntity(world: SIMD3<Float>(0, 0, -0.5))
+                let transform = loadTransform(for: mostRecent) ?? matrix_identity_float4x4
+                let anchor = AnchorEntity(world: transform)
                 anchor.addChild(entity)
                 arView.scene.anchors.append(anchor)
                 modelLoaded = true
@@ -82,6 +83,19 @@ struct ARViewContainer: UIViewRepresentable {
             alertMessage = "Failed to load OBJ files: \(error.localizedDescription)"
             showAlert = true
         }
+    }
+
+    func loadTransform(for objURL: URL) -> simd_float4x4? {
+        let transformURL = objURL.deletingPathExtension().appendingPathExtension("_transform.json")
+        guard let data = try? Data(contentsOf: transformURL),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Float],
+              array.count == 16 else { return nil }
+        return simd_float4x4(
+            SIMD4<Float>(array[0], array[1], array[2], array[3]),
+            SIMD4<Float>(array[4], array[5], array[6], array[7]),
+            SIMD4<Float>(array[8], array[9], array[10], array[11]),
+            SIMD4<Float>(array[12], array[13], array[14], array[15])
+        )
     }
 
     // Simple OBJ parser for vertices and faces (triangles only)
