@@ -13,40 +13,47 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedExportRequest: Bool
     @Binding var submittedName: String
     @Binding var pauseSession: Bool
-    @Binding var overlayExportedMesh: Bool
     let arView = ARView(frame: .zero)
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
     func makeUIView(context: Context) -> ARView {
+        arView.session.delegate = context.coordinator
+        context.coordinator.arView = arView
+
         addCoordinateAxes()
+        
+        let configuration = buildConfigure()
+        arView.session.run(configuration)
+        
         return arView
     }
+
     func updateUIView(_ uiView: ARView, context: Context) {
-        let viewModel = ExportViewModel()
-        setARViewOptions(arView)
-        let configuration = buildConfigure()
-        if submittedExportRequest || overlayExportedMesh {
-            guard let camera = arView.session.currentFrame?.camera else { print("No camera found"); return }
-            let meshAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
-            print("Mesh anchors found: \(meshAnchors.count)")
-            if !meshAnchors.isEmpty {
-                do {
-                    print("Attempting manual export...")
-                    try manualExport(meshAnchors: meshAnchors, fileName: submittedName)
-                } catch {
-                    print("Manual Export Failed: \(error)")
+        if submittedExportRequest {
+            guard let meshAnchors = uiView.session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else {
+                print("No mesh anchors to export.")
+                return
+            }
+            do {
+                print("Attempting manual export...")
+                try manualExport(meshAnchors: meshAnchors, fileName: submittedName)
+                // Reset the request to prevent re-exporting on every view update
+                DispatchQueue.main.async {
+                    self.submittedExportRequest = false
                 }
-            } else {
-                print("No mesh anchors found.")
+            } catch {
+                print("Manual Export Failed: \(error)")
             }
         }
-        if overlayExportedMesh {
-            overlayMostRecentOBJMesh()
-        }
+        
         if pauseSession {
-            arView.session.pause()
-        } else {
-            arView.session.run(configuration)
+            uiView.session.pause()
         }
     }
+    
     private func buildConfigure() -> ARWorldTrackingConfiguration {
         let configuration = ARWorldTrackingConfiguration()
         configuration.environmentTexturing = .automatic
@@ -57,114 +64,27 @@ struct ARWrapperView: UIViewRepresentable {
         }
         return configuration
     }
-    private func setARViewOptions(_ arView: ARView) {
-        // arView.debugOptions.insert(.showSceneUnderstanding)
-    }
-    private func overlayMostRecentOBJMesh() {
-        guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        let folderName = "OBJ_FILES"
-        let folderURL = documentsDirectory.appendingPathComponent(folderName)
-        do {
-            let fileURLs = try FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.contentModificationDateKey], options: .skipsHiddenFiles)
-            let objFiles = fileURLs.filter { $0.pathExtension == "obj" }
-            guard let mostRecent = objFiles.sorted(by: { (a, b) -> Bool in
-                let aDate = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
-                let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date.distantPast
-                return aDate > bDate
-            }).first else { return }
-            if let entity = parseOBJToModelEntity(url: mostRecent) {
-                let anchor = AnchorEntity(world: matrix_identity_float4x4)
-                anchor.addChild(entity)
-                arView.scene.anchors.append(anchor)
-                addOverlayCoordinateAxes()
-            }
-        } catch {
-            print("Failed to overlay OBJ mesh: \(error)")
-        }
-    }
-    private func parseOBJToModelEntity(url: URL) -> ModelEntity? {
-        do {
-            let content = try String(contentsOf: url)
-            var positions: [SIMD3<Float>] = []
-            var indices: [UInt32] = []
-            for line in content.components(separatedBy: .newlines) {
-                let parts = line.split(separator: " ")
-                if parts.count > 0 {
-                    if parts[0] == "v" && parts.count >= 4 {
-                        if let x = Float(parts[1]), let y = Float(parts[2]), let z = Float(parts[3]) {
-                            positions.append([x, y, z])
-                        }
-                    } else if parts[0] == "f" && parts.count >= 4 {
-                        for i in 1...3 {
-                            let vertex = parts[i].split(separator: "/")[0]
-                            if let idx = Int(vertex), idx > 0 {
-                                indices.append(UInt32(idx - 1))
-                            }
-                        }
-                    }
-                }
-            }
-            guard !positions.isEmpty && !indices.isEmpty else { return nil }
-            var meshDesc = MeshDescriptor()
-            meshDesc.positions = MeshBuffer(positions)
-            meshDesc.primitives = .triangles(indices)
-            let mesh = try MeshResource.generate(from: [meshDesc])
-            let material = SimpleMaterial(color: .green, isMetallic: false)
-            return ModelEntity(mesh: mesh, materials: [material])
-        } catch {
-            print("OBJ parse error: \(error)")
-            return nil
-        }
-    }
+    
     private func addCoordinateAxes() {
-        let axisLength: Float = 0.1 // 10cm
+        let axisLength: Float = 0.1
+        let axisThickness: Float = 0.002
         
-        // X-axis (Red)
-        let xAxis = ModelEntity(mesh: .generateBox(size: [axisLength, 0.002, 0.002]))
-        xAxis.model?.materials = [SimpleMaterial(color: .red, isMetallic: false)]
-        xAxis.position = [axisLength/2, 0, 0]
+        let axes = [
+            (color: UIColor.red, size: SIMD3<Float>(axisLength, axisThickness, axisThickness), position: SIMD3<Float>(axisLength/2, 0, 0)),
+            (color: UIColor.green, size: SIMD3<Float>(axisThickness, axisLength, axisThickness), position: SIMD3<Float>(0, axisLength/2, 0)),
+            (color: UIColor.blue, size: SIMD3<Float>(axisThickness, axisThickness, axisLength), position: SIMD3<Float>(0, 0, axisLength/2))
+        ]
         
-        // Y-axis (Green) 
-        let yAxis = ModelEntity(mesh: .generateBox(size: [0.002, axisLength, 0.002]))
-        yAxis.model?.materials = [SimpleMaterial(color: .green, isMetallic: false)]
-        yAxis.position = [0, axisLength/2, 0]
-        
-        // Z-axis (Blue)
-        let zAxis = ModelEntity(mesh: .generateBox(size: [0.002, 0.002, axisLength]))
-        zAxis.model?.materials = [SimpleMaterial(color: .blue, isMetallic: false)]
-        zAxis.position = [0, 0, axisLength/2]
-        
-        let axesAnchor = AnchorEntity(world: matrix_identity_float4x4)
-        axesAnchor.addChild(xAxis)
-        axesAnchor.addChild(yAxis)
-        axesAnchor.addChild(zAxis)
-        arView.scene.anchors.append(axesAnchor)
+        let axesAnchor = AnchorEntity(world: .identity)
+        for axisInfo in axes {
+            let axisEntity = ModelEntity(mesh: .generateBox(size: axisInfo.size))
+            axisEntity.model?.materials = [SimpleMaterial(color: axisInfo.color, isMetallic: false)]
+            axisEntity.position = axisInfo.position
+            axesAnchor.addChild(axisEntity)
+        }
+        arView.scene.addAnchor(axesAnchor)
     }
-    private func addOverlayCoordinateAxes() {
-        let axisLength: Float = 0.2 // 20cm (longer)
-        let axisThickness: Float = 0.004 // Thicker
-        
-        // X-axis (Magenta)
-        let xAxis = ModelEntity(mesh: .generateBox(size: [axisLength, axisThickness, axisThickness]))
-        xAxis.model?.materials = [SimpleMaterial(color: .magenta, isMetallic: false)]
-        xAxis.position = [axisLength/2, 0, 0]
-        
-        // Y-axis (Cyan) 
-        let yAxis = ModelEntity(mesh: .generateBox(size: [axisThickness, axisLength, axisThickness]))
-        yAxis.model?.materials = [SimpleMaterial(color: .cyan, isMetallic: false)]
-        yAxis.position = [0, axisLength/2, 0]
-        
-        // Z-axis (Yellow)
-        let zAxis = ModelEntity(mesh: .generateBox(size: [axisThickness, axisThickness, axisLength]))
-        zAxis.model?.materials = [SimpleMaterial(color: .yellow, isMetallic: false)]
-        zAxis.position = [0, 0, axisLength/2]
-        
-        let axesAnchor = AnchorEntity(world: matrix_identity_float4x4)
-        axesAnchor.addChild(xAxis)
-        axesAnchor.addChild(yAxis)
-        axesAnchor.addChild(zAxis)
-        arView.scene.anchors.append(axesAnchor)
-    }
+    
     private func manualExport(meshAnchors: [ARMeshAnchor], fileName: String) throws {
         var objString = "# Manually exported OBJ\n"
         var vertexCountOffset: UInt32 = 0
@@ -173,47 +93,31 @@ struct ARWrapperView: UIViewRepresentable {
             let geometry = anchor.geometry
             let transform = anchor.transform
 
-            // Add vertices to string
             for i in 0..<geometry.vertices.count {
                 let localVertex = geometry.vertex(at: UInt32(i))
-                let worldVertex4 = transform * SIMD4<Float>(localVertex.x, localVertex.y, localVertex.z, 1)
-                let worldVertex = SIMD3<Float>(worldVertex4.x, worldVertex4.y, worldVertex4.z)
+                let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
                 objString += "v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)\n"
             }
 
-            // Add faces to string
             let faces = geometry.faces
             if faces.primitiveType == .triangle {
-                if faces.bytesPerIndex == 4 { // UInt32
-                    let typedPointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                    for i in 0..<faces.count {
-                        let base = i * faces.indexCountPerPrimitive
-                        let v0 = typedPointer[base + 0] + vertexCountOffset
-                        let v1 = typedPointer[base + 1] + vertexCountOffset
-                        let v2 = typedPointer[base + 2] + vertexCountOffset
-                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
-                    }
-                } else { // UInt16
-                    let typedPointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                     for i in 0..<faces.count {
-                        let base = i * faces.indexCountPerPrimitive
-                        let v0 = UInt32(typedPointer[base + 0]) + vertexCountOffset
-                        let v1 = UInt32(typedPointer[base + 1]) + vertexCountOffset
-                        let v2 = UInt32(typedPointer[base + 2]) + vertexCountOffset
-                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
-                    }
+                for i in 0..<faces.count {
+                    let face = faces.buffer.contents()
+                        .advanced(by: i * faces.bytesPerIndex * faces.indexCountPerPrimitive)
+                        .bindMemory(to: UInt32.self, capacity: faces.indexCountPerPrimitive)
+                    
+                    let v0 = face[0] + vertexCountOffset
+                    let v1 = face[1] + vertexCountOffset
+                    let v2 = face[2] + vertexCountOffset
+                    objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n"
                 }
             }
-
             vertexCountOffset += UInt32(geometry.vertices.count)
         }
 
-        guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            throw NSError(domain: "com.original.creatingLidarModel", code: 153)
-        }
-        let folderName = "OBJ_FILES"
-        let folderURL = directory.appendingPathComponent(folderName)
-        try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
+        guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let folderURL = directory.appendingPathComponent("OBJ_FILES")
+        try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         
         let baseName = fileName.isEmpty ? UUID().uuidString : fileName
         let url = folderURL.appendingPathComponent("\(baseName).obj")
@@ -221,8 +125,100 @@ struct ARWrapperView: UIViewRepresentable {
         try objString.write(to: url, atomically: true, encoding: .utf8)
         print("Manual export saved successfully at \(url)")
     }
+
+    class Coordinator: NSObject, ARSessionDelegate {
+        var parent: ARWrapperView
+        weak var arView: ARView?
+        var customMeshEntity: ModelEntity?
+
+        init(parent: ARWrapperView) {
+            self.parent = parent
+        }
+
+        func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+            guard let meshAnchors = session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else { return }
+            
+            DispatchQueue.global().async {
+                if let meshResource = self.generateLiveMesh(from: meshAnchors) {
+                    DispatchQueue.main.async {
+                        self.updateCustomMesh(with: meshResource)
+                    }
+                }
+            }
+        }
+        
+        private func generateLiveMesh(from meshAnchors: [ARMeshAnchor]) -> MeshResource? {
+            var allVertices: [SIMD3<Float>] = []
+            var allIndices: [UInt32] = []
+            var vertexCountOffset: UInt32 = 0
+
+            for anchor in meshAnchors {
+                let geometry = anchor.geometry
+                let transform = anchor.transform
+
+                allVertices.append(contentsOf: geometry.vertices.asSIMD3(with: transform)))
+                
+                let faces = geometry.faces
+                if faces.primitiveType == .triangle {
+                    let indices = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * 3)
+                    for i in 0..<faces.count {
+                        allIndices.append(contentsOf: [
+                            indices[i * 3 + 0] + vertexCountOffset,
+                            indices[i * 3 + 1] + vertexCountOffset,
+                            indices[i * 3 + 2] + vertexCountOffset
+                        ])
+                    }
+                }
+                vertexCountOffset += UInt32(geometry.vertices.count)
+            }
+            
+            guard !allVertices.isEmpty, !allIndices.isEmpty else { return nil }
+            
+            var descriptor = MeshDescriptor()
+            descriptor.positions = MeshBuffer(allVertices)
+            descriptor.primitives = .triangles(allIndices)
+            
+            do {
+                return try MeshResource.generate(from: [descriptor])
+            } catch {
+                print("Failed to generate live mesh: \(error)")
+                return nil
+            }
+        }
+        
+        private func updateCustomMesh(with resource: MeshResource) {
+            if let entity = customMeshEntity {
+                entity.model?.mesh = resource
+            } else {
+                let material = SimpleMaterial(color: .green, isMetallic: false)
+                let newEntity = ModelEntity(mesh: resource, materials: [material])
+                let anchor = AnchorEntity(world: .identity)
+                anchor.addChild(newEntity)
+                
+                arView?.scene.addAnchor(anchor)
+                customMeshEntity = newEntity
+            }
+        }
+    }
 }
 
-class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
-    // This class is no longer used for OBJ export but may be kept for other purposes.
+extension ARMeshGeometry.Vertices {
+    func asSIMD3(with transform: simd_float4x4) -> [SIMD3<Float>] {
+        var vertices: [SIMD3<Float>] = []
+        for i in 0..<self.count {
+            let localVertex = self.buffer.contents()
+                .advanced(by: i * self.stride)
+                .bindMemory(to: SIMD3<Float>.self, capacity: 1)
+                .pointee
+            let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
+            vertices.append(worldVertex)
+        }
+        return vertices
+    }
+}
+
+extension SIMD4 {
+    var xyz: SIMD3<Scalar> {
+        return SIMD3<Scalar>(x, y, z)
+    }
 }
