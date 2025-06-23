@@ -58,7 +58,7 @@ struct ARWrapperView: UIViewRepresentable {
         return configuration
     }
     private func setARViewOptions(_ arView: ARView) {
-        arView.debugOptions.insert(.showSceneUnderstanding)
+        // arView.debugOptions.insert(.showSceneUnderstanding)
     }
     private func overlayMostRecentOBJMesh() {
         guard let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
