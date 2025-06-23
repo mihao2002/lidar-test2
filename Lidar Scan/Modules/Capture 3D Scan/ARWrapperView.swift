@@ -218,21 +218,6 @@ struct ARWrapperView: UIViewRepresentable {
     }
 }
 
-extension ARMeshGeometry.Vertices {
-    func asSIMD3(with transform: simd_float4x4) -> [SIMD3<Float>] {
-        var vertices: [SIMD3<Float>] = []
-        for i in 0..<self.count {
-            let localVertex = self.buffer.contents()
-                .advanced(by: i * self.stride)
-                .bindMemory(to: SIMD3<Float>.self, capacity: 1)
-                .pointee
-            let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
-            vertices.append(worldVertex)
-        }
-        return vertices
-    }
-}
-
 extension SIMD4 {
     var xyz: SIMD3<Scalar> {
         return SIMD3<Scalar>(x, y, z)
