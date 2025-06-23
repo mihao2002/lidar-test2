@@ -144,22 +144,29 @@ struct ARWrapperView: UIViewRepresentable {
             self.parent = parent
         }
 
-        func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-            guard let meshAnchors = session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else { return }
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            // We use didUpdate frame instead of didUpdate anchors to get access to the camera image
+            guard let meshAnchors = frame.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else { return }
             
             DispatchQueue.global().async {
-                if let meshResource = self.generateLiveMesh(from: meshAnchors) {
-                    DispatchQueue.main.async {
-                        self.updateCustomMesh(with: meshResource)
+                let (meshResource, texture) = self.generateTexturedMesh(from: meshAnchors, in: frame)
+                
+                DispatchQueue.main.async {
+                    if let mesh = meshResource, let tex = texture {
+                        self.updateCustomMesh(with: mesh, texture: tex)
                     }
                 }
             }
         }
         
-        private func generateLiveMesh(from meshAnchors: [ARMeshAnchor]) -> MeshResource? {
+        private func generateTexturedMesh(from meshAnchors: [ARMeshAnchor], in frame: ARFrame) -> (MeshResource?, TextureResource?) {
             var allVertices: [SIMD3<Float>] = []
+            var allTexCoords: [SIMD2<Float>] = []
             var allIndices: [UInt32] = []
             var vertexCountOffset: UInt32 = 0
+            
+            let camera = frame.camera
+            let viewportSize = parent.arView.bounds.size
 
             for anchor in meshAnchors {
                 let geometry = anchor.geometry
@@ -169,18 +176,23 @@ struct ARWrapperView: UIViewRepresentable {
                     let localVertex = geometry.vertex(at: UInt32(i))
                     let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
                     allVertices.append(worldVertex)
+                    
+                    let projectedPoint = camera.projectPoint(worldVertex, orientation: .portrait, viewportSize: viewportSize)
+                    let u = projectedPoint.x / viewportSize.width
+                    let v = projectedPoint.y / viewportSize.height
+                    allTexCoords.append([Float(u), Float(v)])
                 }
                 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
-                     if faces.bytesPerIndex == 4 { // UInt32
-                        let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                        for i in 0..<faces.count * faces.indexCountPerPrimitive {
+                    if faces.bytesPerIndex == 4 {
+                        let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * 3)
+                        for i in 0..<(faces.count * 3) {
                             allIndices.append(pointer[i] + vertexCountOffset)
                         }
-                    } else { // UInt16
-                        let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                        for i in 0..<faces.count * faces.indexCountPerPrimitive {
+                    } else {
+                        let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * 3)
+                        for i in 0..<(faces.count * 3) {
                             allIndices.append(UInt32(pointer[i]) + vertexCountOffset)
                         }
                     }
@@ -188,25 +200,38 @@ struct ARWrapperView: UIViewRepresentable {
                 vertexCountOffset += UInt32(geometry.vertices.count)
             }
             
-            guard !allVertices.isEmpty, !allIndices.isEmpty else { return nil }
+            guard !allVertices.isEmpty, !allIndices.isEmpty else { return (nil, nil) }
             
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
+            descriptor.textureCoordinates = MeshBuffer(allTexCoords)
             
             do {
-                return try MeshResource.generate(from: [descriptor])
+                let meshResource = try MeshResource.generate(from: [descriptor])
+                let capturedImage = frame.capturedImage
+                let ciImage = CIImage(cvPixelBuffer: capturedImage)
+                let context = CIContext(options: nil)
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return (meshResource, nil) }
+                let textureResource = try TextureResource.generate(from: cgImage, options: .init(semantic: .color))
+                
+                return (meshResource, textureResource)
             } catch {
-                print("Failed to generate live mesh: \(error)")
-                return nil
+                print("Failed to generate textured mesh: \(error)")
+                return (nil, nil)
             }
         }
         
-        private func updateCustomMesh(with resource: MeshResource) {
+        private func updateCustomMesh(with resource: MeshResource, texture: TextureResource) {
             if let entity = customMeshEntity {
                 entity.model?.mesh = resource
+                if var material = entity.model?.materials.first as? UnlitMaterial {
+                    material.color = .init(texture: .init(texture))
+                    entity.model?.materials = [material]
+                }
             } else {
-                let material = SimpleMaterial(color: .green, isMetallic: false)
+                var material = UnlitMaterial()
+                material.color = .init(texture: .init(texture))
                 let newEntity = ModelEntity(mesh: resource, materials: [material])
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(newEntity)
