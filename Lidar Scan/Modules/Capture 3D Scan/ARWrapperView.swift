@@ -253,7 +253,7 @@ struct ARWrapperView: UIViewRepresentable {
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
-            let mesh = (try? MeshResource.generate(from: [descriptor])) ?? MeshResource()
+            let mesh = (try? MeshResource.generate([descriptor])) ?? MeshResource()
             return (mesh, allVertices, allIndices)
         }
 
@@ -332,7 +332,7 @@ struct ARWrapperView: UIViewRepresentable {
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(positions)
             descriptor.primitives = .triangles(indices)
-            let smoothedMesh = try? MeshResource.generate(from: [descriptor])
+            let smoothedMesh = try? MeshResource.generate([descriptor])
             return (smoothedMesh ?? MeshResource(), indices)
         }
     }
