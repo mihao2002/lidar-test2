@@ -161,7 +161,19 @@ struct ARWrapperView: UIViewRepresentable {
             var allVertices: [SIMD3<Float>] = []
             var allIndices: [UInt32] = []
             var vertexCountOffset: UInt32 = 0
-            typealias Edge = (UInt32, UInt32)
+            struct Edge: Hashable {
+                let a: UInt32
+                let b: UInt32
+                init(_ a: UInt32, _ b: UInt32) {
+                    if a < b {
+                        self.a = a
+                        self.b = b
+                    } else {
+                        self.a = b
+                        self.b = a
+                    }
+                }
+            }
             var edgeToTriangles: [Edge: [Int]] = [:] // Edge to triangle indices
             var triangles: [(indices: [UInt32], normal: SIMD3<Float>)] = []
 
@@ -189,7 +201,7 @@ struct ARWrapperView: UIViewRepresentable {
                             triangles.append((triIndices, normal))
                             // Register edges
                             for e in [(v0,v1), (v1,v2), (v2,v0)] {
-                                let edge = e.0 < e.1 ? (e.0, e.1) : (e.1, e.0)
+                                let edge = Edge(e.0, e.1)
                                 edgeToTriangles[edge, default: []].append(triangles.count-1)
                             }
                         }
@@ -204,7 +216,7 @@ struct ARWrapperView: UIViewRepresentable {
                             let normal = normalForTriangle(v0, v1, v2, allVertices)
                             triangles.append((triIndices, normal))
                             for e in [(v0,v1), (v1,v2), (v2,v0)] {
-                                let edge = e.0 < e.1 ? (e.0, e.1) : (e.1, e.0)
+                                let edge = Edge(e.0, e.1)
                                 edgeToTriangles[edge, default: []].append(triangles.count-1)
                             }
                         }
