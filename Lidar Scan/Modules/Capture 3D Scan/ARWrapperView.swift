@@ -165,6 +165,12 @@ struct ARWrapperView: UIViewRepresentable {
                 }
             }
         }
+
+        func makeEmptyMesh() -> MeshResource {
+            let emptyDescriptor = MeshDescriptor(name: "EmptyMesh")
+            let mesh = try! MeshResource.generate(from: [emptyDescriptor])
+            return mesh
+        }
         
         private func generateLiveMeshAndStore(_ meshAnchors: [ARMeshAnchor]) -> (MeshResource, [SIMD3<Float>], [UInt32]) {
             var allVertices: [SIMD3<Float>] = []
@@ -253,7 +259,7 @@ struct ARWrapperView: UIViewRepresentable {
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
-            let mesh = (try? MeshResource.generate([descriptor])) ?? MeshResource()
+            let mesh = (try? MeshResource.generate([descriptor])) ?? makeEmptyMesh()
             return (mesh, allVertices, allIndices)
         }
 
