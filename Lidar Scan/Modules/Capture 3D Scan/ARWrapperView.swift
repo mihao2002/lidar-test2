@@ -141,6 +141,8 @@ struct ARWrapperView: UIViewRepresentable {
         weak var arView: ARView?
         var customMeshEntity: ModelEntity?
         var smoothedMeshEntity: ModelEntity?
+        var originalPositions: [SIMD3<Float>] = []
+        var originalIndices: [UInt32] = []
 
         init(parent: ARWrapperView) {
             self.parent = parent
@@ -151,19 +153,20 @@ struct ARWrapperView: UIViewRepresentable {
             if meshAnchors.isEmpty { return }
             
             DispatchQueue.global().async {
-                if let meshResource = self.generateLiveMesh(from: meshAnchors) {
-                    DispatchQueue.main.async {
-                        if self.parent.shouldSmoothMesh {
-                            self.showSmoothedMesh(from: meshResource)
-                        } else {
-                            self.showOriginalMesh(meshResource)
-                        }
+                let (meshResource, positions, indices) = self.generateLiveMeshAndStore(meshAnchors)
+                DispatchQueue.main.async {
+                    self.originalPositions = positions
+                    self.originalIndices = indices
+                    if self.parent.shouldSmoothMesh {
+                        self.showSmoothedMesh()
+                    } else {
+                        self.showOriginalMesh(meshResource)
                     }
                 }
             }
         }
         
-        private func generateLiveMesh(from meshAnchors: [ARMeshAnchor]) -> MeshResource? {
+        private func generateLiveMeshAndStore(_ meshAnchors: [ARMeshAnchor]) -> (MeshResource, [SIMD3<Float>], [UInt32]) {
             var allVertices: [SIMD3<Float>] = []
             var allIndices: [UInt32] = []
             var vertexCountOffset: UInt32 = 0
@@ -180,7 +183,7 @@ struct ARWrapperView: UIViewRepresentable {
                     }
                 }
             }
-            var edgeToTriangles: [Edge: [Int]] = [:] // Edge to triangle indices
+            var edgeToTriangles: [Edge: [Int]] = [:]
             var triangles: [(indices: [UInt32], normal: SIMD3<Float>)] = []
 
             for anchor in meshAnchors {
@@ -205,7 +208,6 @@ struct ARWrapperView: UIViewRepresentable {
                             let triIndices = [v0, v1, v2]
                             let normal = normalForTriangle(v0, v1, v2, allVertices)
                             triangles.append((triIndices, normal))
-                            // Register edges
                             for e in [(v0,v1), (v1,v2), (v2,v0)] {
                                 let edge = Edge(e.0, e.1)
                                 edgeToTriangles[edge, default: []].append(triangles.count-1)
@@ -241,25 +243,18 @@ struct ARWrapperView: UIViewRepresentable {
                 let n1 = triangles[t1].normal
                 let dot = simd_dot(simd_normalize(n0), simd_normalize(n1))
                 if dot > cos(angleThreshold) {
-                    // Mark the second triangle for removal
                     toRemove.insert(t1)
                 }
             }
-            // Add only triangles not marked for removal
             for (i, tri) in triangles.enumerated() where !toRemove.contains(i) {
                 allIndices.append(contentsOf: tri.indices)
             }
 
-            guard !allVertices.isEmpty, !allIndices.isEmpty else { return nil }
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
-            do {
-                return try MeshResource.generate(from: [descriptor])
-            } catch {
-                print("Failed to generate live mesh: \(error)")
-                return nil
-            }
+            let mesh = (try? MeshResource.generate(from: [descriptor])) ?? MeshResource()
+            return (mesh, allVertices, allIndices)
         }
 
         // Helper to compute normal for a triangle
@@ -271,7 +266,6 @@ struct ARWrapperView: UIViewRepresentable {
         }
         
         private func showOriginalMesh(_ resource: MeshResource) {
-            // Remove smoothed mesh if present
             if let smoothed = smoothedMeshEntity {
                 smoothed.removeFromParent()
                 smoothedMeshEntity = nil
@@ -288,17 +282,17 @@ struct ARWrapperView: UIViewRepresentable {
             }
         }
         
-        private func showSmoothedMesh(from resource: MeshResource) {
-            // Remove original mesh if present
+        private func showSmoothedMesh() {
             if let original = customMeshEntity {
                 original.removeFromParent()
                 customMeshEntity = nil
             }
             if let smoothed = smoothedMeshEntity {
-                smoothed.model?.mesh = resource
+                // Re-smooth and update
+                let (smoothedMesh, _) = self.laplacianSmooth(self.originalPositions, self.originalIndices)
+                smoothed.model?.mesh = smoothedMesh
             } else {
-                // Apply Laplacian smoothing
-                let (smoothedMesh, indices) = self.laplacianSmooth(resource)
+                let (smoothedMesh, _) = self.laplacianSmooth(self.originalPositions, self.originalIndices)
                 let material = SimpleMaterial(color: .blue, isMetallic: false)
                 let newEntity = ModelEntity(mesh: smoothedMesh, materials: [material])
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
@@ -308,20 +302,11 @@ struct ARWrapperView: UIViewRepresentable {
             }
         }
         
-        // Laplacian smoothing: average each vertex with its neighbors
-        private func laplacianSmooth(_ mesh: MeshResource, iterations: Int = 1) -> (MeshResource, [UInt32]) {
-            guard let positionsBuffer = mesh.contents(for: .vertex),
-                  let indexBuffer = mesh.contents(for: .index) else {
-                return (mesh, [])
-            }
-            let vertexCount = positionsBuffer.count / MemoryLayout<SIMD3<Float>>.stride
-            let indexCount = indexBuffer.count / MemoryLayout<UInt32>.stride
-            var positions = [SIMD3<Float>](repeating: .zero, count: vertexCount)
-            var indices = [UInt32](repeating: 0, count: indexCount)
-            positionsBuffer.copyBytes(to: &positions, count: positionsBuffer.count)
-            indexBuffer.copyBytes(to: &indices, count: indexBuffer.count)
+        private func laplacianSmooth(_ positions: [SIMD3<Float>], _ indices: [UInt32], iterations: Int = 1) -> (MeshResource, [UInt32]) {
+            var positions = positions
+            let indices = indices
             // Build adjacency
-            var adjacency = Array(repeating: Set<Int>(), count: vertexCount)
+            var adjacency = Array(repeating: Set<Int>(), count: positions.count)
             for i in stride(from: 0, to: indices.count, by: 3) {
                 let v0 = Int(indices[i])
                 let v1 = Int(indices[i+1])
@@ -348,7 +333,7 @@ struct ARWrapperView: UIViewRepresentable {
             descriptor.positions = MeshBuffer(positions)
             descriptor.primitives = .triangles(indices)
             let smoothedMesh = try? MeshResource.generate(from: [descriptor])
-            return (smoothedMesh ?? mesh, indices)
+            return (smoothedMesh ?? MeshResource(), indices)
         }
     }
 }
