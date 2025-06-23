@@ -242,7 +242,7 @@ struct ARWrapperView: UIViewRepresentable {
                 let n0 = triangles[t0].normal
                 let n1 = triangles[t1].normal
                 let dot = simd_dot(simd_normalize(n0), simd_normalize(n1))
-                if dot > cos(angleThreshold) {
+                if dot > cos(from: angleThreshold) {
                     toRemove.insert(t1)
                 }
             }
