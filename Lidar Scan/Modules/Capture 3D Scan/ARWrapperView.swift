@@ -182,12 +182,27 @@ struct ARWrapperView: UIViewRepresentable {
             }
 
             // Add faces to string
-            for i in 0..<geometry.faces.count {
-                let face = geometry.faces.primitive(at: i)
-                let v0 = face[0] + vertexCountOffset
-                let v1 = face[1] + vertexCountOffset
-                let v2 = face[2] + vertexCountOffset
-                objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
+            let faces = geometry.faces
+            if faces.primitiveType == .triangle {
+                if faces.bytesPerIndex == 4 { // UInt32
+                    let typedPointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                    for i in 0..<faces.count {
+                        let base = i * faces.indexCountPerPrimitive
+                        let v0 = typedPointer[base + 0] + vertexCountOffset
+                        let v1 = typedPointer[base + 1] + vertexCountOffset
+                        let v2 = typedPointer[base + 2] + vertexCountOffset
+                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
+                    }
+                } else { // UInt16
+                    let typedPointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                     for i in 0..<faces.count {
+                        let base = i * faces.indexCountPerPrimitive
+                        let v0 = UInt32(typedPointer[base + 0]) + vertexCountOffset
+                        let v1 = UInt32(typedPointer[base + 1]) + vertexCountOffset
+                        let v2 = UInt32(typedPointer[base + 2]) + vertexCountOffset
+                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
+                    }
+                }
             }
 
             vertexCountOffset += UInt32(geometry.vertices.count)
