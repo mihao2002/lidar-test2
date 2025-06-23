@@ -75,7 +75,7 @@ struct ARWrapperView: UIViewRepresentable {
             (color: UIColor.blue, size: SIMD3<Float>(axisThickness, axisThickness, axisLength), position: SIMD3<Float>(0, 0, axisLength/2))
         ]
         
-        let axesAnchor = AnchorEntity(world: .identity)
+        let axesAnchor = AnchorEntity(world: matrix_identity_float4x4)
         for axisInfo in axes {
             let axisEntity = ModelEntity(mesh: .generateBox(size: axisInfo.size))
             axisEntity.model?.materials = [SimpleMaterial(color: axisInfo.color, isMetallic: false)]
@@ -101,15 +101,24 @@ struct ARWrapperView: UIViewRepresentable {
 
             let faces = geometry.faces
             if faces.primitiveType == .triangle {
-                for i in 0..<faces.count {
-                    let face = faces.buffer.contents()
-                        .advanced(by: i * faces.bytesPerIndex * faces.indexCountPerPrimitive)
-                        .bindMemory(to: UInt32.self, capacity: faces.indexCountPerPrimitive)
-                    
-                    let v0 = face[0] + vertexCountOffset
-                    let v1 = face[1] + vertexCountOffset
-                    let v2 = face[2] + vertexCountOffset
-                    objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n"
+                if faces.bytesPerIndex == 4 { // UInt32
+                    let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                    for i in 0..<faces.count {
+                        let base = i * faces.indexCountPerPrimitive
+                        let v0 = pointer[base + 0] + vertexCountOffset
+                        let v1 = pointer[base + 1] + vertexCountOffset
+                        let v2 = pointer[base + 2] + vertexCountOffset
+                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n"
+                    }
+                } else { // UInt16
+                    let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                    for i in 0..<faces.count {
+                        let base = i * faces.indexCountPerPrimitive
+                        let v0 = UInt32(pointer[base + 0]) + vertexCountOffset
+                        let v1 = UInt32(pointer[base + 1]) + vertexCountOffset
+                        let v2 = UInt32(pointer[base + 2]) + vertexCountOffset
+                        objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n"
+                    }
                 }
             }
             vertexCountOffset += UInt32(geometry.vertices.count)
@@ -156,17 +165,24 @@ struct ARWrapperView: UIViewRepresentable {
                 let geometry = anchor.geometry
                 let transform = anchor.transform
 
-                allVertices.append(contentsOf: geometry.vertices.asSIMD3(with: transform)))
+                for i in 0..<geometry.vertices.count {
+                    let localVertex = geometry.vertex(at: UInt32(i))
+                    let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
+                    allVertices.append(worldVertex)
+                }
                 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
-                    let indices = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * 3)
-                    for i in 0..<faces.count {
-                        allIndices.append(contentsOf: [
-                            indices[i * 3 + 0] + vertexCountOffset,
-                            indices[i * 3 + 1] + vertexCountOffset,
-                            indices[i * 3 + 2] + vertexCountOffset
-                        ])
+                     if faces.bytesPerIndex == 4 { // UInt32
+                        let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                        for i in 0..<faces.count * faces.indexCountPerPrimitive {
+                            allIndices.append(pointer[i] + vertexCountOffset)
+                        }
+                    } else { // UInt16
+                        let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                        for i in 0..<faces.count * faces.indexCountPerPrimitive {
+                            allIndices.append(UInt32(pointer[i]) + vertexCountOffset)
+                        }
                     }
                 }
                 vertexCountOffset += UInt32(geometry.vertices.count)
@@ -192,7 +208,7 @@ struct ARWrapperView: UIViewRepresentable {
             } else {
                 let material = SimpleMaterial(color: .green, isMetallic: false)
                 let newEntity = ModelEntity(mesh: resource, materials: [material])
-                let anchor = AnchorEntity(world: .identity)
+                let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(newEntity)
                 
                 arView?.scene.addAnchor(anchor)
