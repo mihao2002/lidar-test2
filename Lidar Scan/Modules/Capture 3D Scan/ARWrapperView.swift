@@ -145,8 +145,8 @@ struct ARWrapperView: UIViewRepresentable {
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            let meshAnchors = frame.anchors.compactMap({ $0 as? ARMeshAnchor })
-            if meshAnchors.isEmpty { return }
+            // We use didUpdate frame instead of didUpdate anchors to get access to the camera image
+            guard let meshAnchors = frame.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else { return }
             
             DispatchQueue.global().async {
                 let (meshResource, texture) = self.generateTexturedMesh(from: meshAnchors, in: frame)
