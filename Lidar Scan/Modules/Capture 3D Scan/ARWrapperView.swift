@@ -13,6 +13,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedExportRequest: Bool
     @Binding var submittedName: String
     @Binding var pauseSession: Bool
+    @Binding var shouldSmoothMesh: Bool
     let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
@@ -139,6 +140,7 @@ struct ARWrapperView: UIViewRepresentable {
         var parent: ARWrapperView
         weak var arView: ARView?
         var customMeshEntity: ModelEntity?
+        var smoothedMeshEntity: ModelEntity?
 
         init(parent: ARWrapperView) {
             self.parent = parent
@@ -151,7 +153,11 @@ struct ARWrapperView: UIViewRepresentable {
             DispatchQueue.global().async {
                 if let meshResource = self.generateLiveMesh(from: meshAnchors) {
                     DispatchQueue.main.async {
-                        self.updateCustomMesh(with: meshResource)
+                        if self.parent.shouldSmoothMesh {
+                            self.showSmoothedMesh(from: meshResource)
+                        } else {
+                            self.showOriginalMesh(meshResource)
+                        }
                     }
                 }
             }
@@ -264,7 +270,12 @@ struct ARWrapperView: UIViewRepresentable {
             return simd_cross(p1 - p0, p2 - p0)
         }
         
-        private func updateCustomMesh(with resource: MeshResource) {
+        private func showOriginalMesh(_ resource: MeshResource) {
+            // Remove smoothed mesh if present
+            if let smoothed = smoothedMeshEntity {
+                smoothed.removeFromParent()
+                smoothedMeshEntity = nil
+            }
             if let entity = customMeshEntity {
                 entity.model?.mesh = resource
             } else {
@@ -272,10 +283,72 @@ struct ARWrapperView: UIViewRepresentable {
                 let newEntity = ModelEntity(mesh: resource, materials: [material])
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(newEntity)
-                
                 arView?.scene.addAnchor(anchor)
                 customMeshEntity = newEntity
             }
+        }
+        
+        private func showSmoothedMesh(from resource: MeshResource) {
+            // Remove original mesh if present
+            if let original = customMeshEntity {
+                original.removeFromParent()
+                customMeshEntity = nil
+            }
+            if let smoothed = smoothedMeshEntity {
+                smoothed.model?.mesh = resource
+            } else {
+                // Apply Laplacian smoothing
+                let (smoothedMesh, indices) = self.laplacianSmooth(resource)
+                let material = SimpleMaterial(color: .blue, isMetallic: false)
+                let newEntity = ModelEntity(mesh: smoothedMesh, materials: [material])
+                let anchor = AnchorEntity(world: matrix_identity_float4x4)
+                anchor.addChild(newEntity)
+                arView?.scene.addAnchor(anchor)
+                smoothedMeshEntity = newEntity
+            }
+        }
+        
+        // Laplacian smoothing: average each vertex with its neighbors
+        private func laplacianSmooth(_ mesh: MeshResource, iterations: Int = 1) -> (MeshResource, [UInt32]) {
+            guard let positionsBuffer = mesh.contents(for: .vertex),
+                  let indexBuffer = mesh.contents(for: .index) else {
+                return (mesh, [])
+            }
+            let vertexCount = positionsBuffer.count / MemoryLayout<SIMD3<Float>>.stride
+            let indexCount = indexBuffer.count / MemoryLayout<UInt32>.stride
+            var positions = [SIMD3<Float>](repeating: .zero, count: vertexCount)
+            var indices = [UInt32](repeating: 0, count: indexCount)
+            positionsBuffer.copyBytes(to: &positions, count: positionsBuffer.count)
+            indexBuffer.copyBytes(to: &indices, count: indexBuffer.count)
+            // Build adjacency
+            var adjacency = Array(repeating: Set<Int>(), count: vertexCount)
+            for i in stride(from: 0, to: indices.count, by: 3) {
+                let v0 = Int(indices[i])
+                let v1 = Int(indices[i+1])
+                let v2 = Int(indices[i+2])
+                adjacency[v0].formUnion([v1, v2])
+                adjacency[v1].formUnion([v0, v2])
+                adjacency[v2].formUnion([v0, v1])
+            }
+            // Smooth
+            for _ in 0..<iterations {
+                var newPositions = positions
+                for i in 0..<positions.count {
+                    let neighbors = adjacency[i]
+                    guard !neighbors.isEmpty else { continue }
+                    var avg = SIMD3<Float>(repeating: 0)
+                    for n in neighbors { avg += positions[n] }
+                    avg /= Float(neighbors.count)
+                    newPositions[i] = avg
+                }
+                positions = newPositions
+            }
+            // Create new mesh
+            var descriptor = MeshDescriptor()
+            descriptor.positions = MeshBuffer(positions)
+            descriptor.primitives = .triangles(indices)
+            let smoothedMesh = try? MeshResource.generate(from: [descriptor])
+            return (smoothedMesh ?? mesh, indices)
         }
     }
 }

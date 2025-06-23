@@ -12,12 +12,14 @@ struct Capture3DScanView: View {
     @State var submittedExportRequest = false
     @State var submittedName = ""
     @State var pauseSession: Bool = false
+    @State var shouldSmoothMesh: Bool = false
     var body: some View {
         NavigationView {
             ZStack(alignment: .bottom) {
                 ARWrapperView(submittedExportRequest: $submittedExportRequest,
                               submittedName: $submittedName,
-                              pauseSession: $pauseSession)
+                              pauseSession: $pauseSession,
+                              shouldSmoothMesh: $shouldSmoothMesh)
                 .ignoresSafeArea()
                 VStack {
                     HStack {
@@ -52,6 +54,16 @@ struct Capture3DScanView: View {
                             .frame(width: UIScreen.main.bounds.width-120)
                             .padding()
                             .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    Button {
+                        shouldSmoothMesh.toggle()
+                    } label: {
+                        Text("Smooth Mesh")
+                            .frame(width: UIScreen.main.bounds.width-120)
+                            .padding()
+                            .background(Color.blue.opacity(0.7))
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }
