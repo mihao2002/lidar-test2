@@ -16,6 +16,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var overlayExportedMesh: Bool
     let arView = ARView(frame: .zero)
     func makeUIView(context: Context) -> ARView {
+        addCoordinateAxes()
         return arView
     }
     func updateUIView(_ uiView: ARView, context: Context) {
@@ -75,7 +76,6 @@ struct ARWrapperView: UIViewRepresentable {
                 let anchor = AnchorEntity(world: matrix_identity_float4x4)
                 anchor.addChild(entity)
                 arView.scene.anchors.append(anchor)
-                addCoordinateAxes()
             }
         } catch {
             print("Failed to overlay OBJ mesh: \(error)")
