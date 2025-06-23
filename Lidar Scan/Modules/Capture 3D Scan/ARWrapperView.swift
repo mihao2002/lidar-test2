@@ -161,6 +161,9 @@ struct ARWrapperView: UIViewRepresentable {
             var allVertices: [SIMD3<Float>] = []
             var allIndices: [UInt32] = []
             var vertexCountOffset: UInt32 = 0
+            typealias Edge = (UInt32, UInt32)
+            var edgeToTriangles: [Edge: [Int]] = [:] // Edge to triangle indices
+            var triangles: [(indices: [UInt32], normal: SIMD3<Float>)] = []
 
             for anchor in meshAnchors {
                 let geometry = anchor.geometry
@@ -174,33 +177,79 @@ struct ARWrapperView: UIViewRepresentable {
                 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
-                    if faces.bytesPerIndex == 4 { // UInt32
+                    if faces.bytesPerIndex == 4 {
                         let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                        for i in 0..<(faces.count * faces.indexCountPerPrimitive) {
-                            allIndices.append(pointer[i] + vertexCountOffset)
+                        for i in 0..<faces.count {
+                            let base = i * faces.indexCountPerPrimitive
+                            let v0 = pointer[base + 0] + vertexCountOffset
+                            let v1 = pointer[base + 1] + vertexCountOffset
+                            let v2 = pointer[base + 2] + vertexCountOffset
+                            let triIndices = [v0, v1, v2]
+                            let normal = normalForTriangle(v0, v1, v2, allVertices)
+                            triangles.append((triIndices, normal))
+                            // Register edges
+                            for e in [(v0,v1), (v1,v2), (v2,v0)] {
+                                let edge = e.0 < e.1 ? (e.0, e.1) : (e.1, e.0)
+                                edgeToTriangles[edge, default: []].append(triangles.count-1)
+                            }
                         }
-                    } else { // UInt16
+                    } else {
                         let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                        for i in 0..<(faces.count * faces.indexCountPerPrimitive) {
-                            allIndices.append(UInt32(pointer[i]) + vertexCountOffset)
+                        for i in 0..<faces.count {
+                            let base = i * faces.indexCountPerPrimitive
+                            let v0 = UInt32(pointer[base + 0]) + vertexCountOffset
+                            let v1 = UInt32(pointer[base + 1]) + vertexCountOffset
+                            let v2 = UInt32(pointer[base + 2]) + vertexCountOffset
+                            let triIndices = [v0, v1, v2]
+                            let normal = normalForTriangle(v0, v1, v2, allVertices)
+                            triangles.append((triIndices, normal))
+                            for e in [(v0,v1), (v1,v2), (v2,v0)] {
+                                let edge = e.0 < e.1 ? (e.0, e.1) : (e.1, e.0)
+                                edgeToTriangles[edge, default: []].append(triangles.count-1)
+                            }
                         }
                     }
                 }
                 vertexCountOffset += UInt32(geometry.vertices.count)
             }
-            
+
+            // Denoising: Remove one triangle from each pair of nearly coplanar adjacent triangles
+            let angleThreshold: Float = .pi / 18 // 10 degrees
+            var toRemove = Set<Int>()
+            for (_, triIndices) in edgeToTriangles where triIndices.count == 2 {
+                let t0 = triIndices[0]
+                let t1 = triIndices[1]
+                let n0 = triangles[t0].normal
+                let n1 = triangles[t1].normal
+                let dot = simd_dot(simd_normalize(n0), simd_normalize(n1))
+                if dot > cos(angleThreshold) {
+                    // Mark the second triangle for removal
+                    toRemove.insert(t1)
+                }
+            }
+            // Add only triangles not marked for removal
+            for (i, tri) in triangles.enumerated() where !toRemove.contains(i) {
+                allIndices.append(contentsOf: tri.indices)
+            }
+
             guard !allVertices.isEmpty, !allIndices.isEmpty else { return nil }
-            
             var descriptor = MeshDescriptor()
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
-            
             do {
                 return try MeshResource.generate(from: [descriptor])
             } catch {
                 print("Failed to generate live mesh: \(error)")
                 return nil
             }
+        }
+
+        // Helper to compute normal for a triangle
+        private func normalForTriangle(_ v0: UInt32, _ v1: UInt32, _ v2: UInt32, _ vertices: [SIMD3<Float>]) -> SIMD3<Float> {
+            let p0 = vertices[Int(v0)]
+            let p1 = vertices[Int(v1)]
+            let p2 = vertices[Int(v2)]
+            return simd_cross(p1 - p0, p2 - p0)
         }
         
         private func updateCustomMesh(with resource: MeshResource) {
