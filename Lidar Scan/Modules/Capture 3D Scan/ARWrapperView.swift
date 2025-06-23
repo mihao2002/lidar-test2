@@ -23,19 +23,19 @@ struct ARWrapperView: UIViewRepresentable {
         let viewModel = ExportViewModel()
         setARViewOptions(arView)
         let configuration = buildConfigure()
-        if submittedExportRequest {
+        if submittedExportRequest || overlayExportedMesh {
             guard let camera = arView.session.currentFrame?.camera else { print("No camera found"); return }
             let meshAnchors = arView.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
             print("Mesh anchors found: \(meshAnchors.count)")
-            if !meshAnchors.isEmpty, let asset = viewModel.convertToAsset(meshAnchor: meshAnchors, camera: camera) {
+            if !meshAnchors.isEmpty {
                 do {
-                    print("Attempting export...")
-                    try ExportViewModel().export(asset: asset, fileName: submittedName)
+                    print("Attempting manual export...")
+                    try manualExport(meshAnchors: meshAnchors, fileName: submittedName)
                 } catch {
-                    print("Export Failed: \(error)")
+                    print("Manual Export Failed: \(error)")
                 }
             } else {
-                print("No mesh anchors found or asset conversion failed.")
+                print("No mesh anchors found.")
             }
         }
         if overlayExportedMesh {
@@ -165,32 +165,49 @@ struct ARWrapperView: UIViewRepresentable {
         axesAnchor.addChild(zAxis)
         arView.scene.anchors.append(axesAnchor)
     }
-}
+    private func manualExport(meshAnchors: [ARMeshAnchor], fileName: String) throws {
+        var objString = "# Manually exported OBJ\n"
+        var vertexCountOffset: UInt32 = 0
 
-class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
-    func convertToAsset(meshAnchor: [ARMeshAnchor], camera: ARCamera) -> MDLAsset? {
-        guard let device = MTLCreateSystemDefaultDevice() else { return nil}
-        let asset = MDLAsset()
-        for anchor in meshAnchor {
-            let mdlMesh = anchor.geometry.toMDLMesh(device: device, camera: camera, modelMatrix: anchor.transform)
-            asset.add(mdlMesh)
+        for anchor in meshAnchors {
+            let geometry = anchor.geometry
+            let transform = anchor.transform
+
+            // Add vertices to string
+            for i in 0..<geometry.vertices.count {
+                let localVertex = geometry.vertex(at: UInt32(i))
+                let worldVertex4 = transform * SIMD4<Float>(localVertex.x, localVertex.y, localVertex.z, 1)
+                let worldVertex = SIMD3<Float>(worldVertex4.x, worldVertex4.y, worldVertex4.z)
+                objString += "v \(worldVertex.x) \(worldVertex.y) \(worldVertex.z)\n"
+            }
+
+            // Add faces to string
+            for i in 0..<geometry.faces.count {
+                let face = geometry.faces.primitive(at: i)
+                let v0 = face[0] + vertexCountOffset
+                let v1 = face[1] + vertexCountOffset
+                let v2 = face[2] + vertexCountOffset
+                objString += "f \(v0 + 1) \(v1 + 1) \(v2 + 1)\n" // OBJ indices are 1-based
+            }
+
+            vertexCountOffset += UInt32(geometry.vertices.count)
         }
-        return asset
-    }
-    func export(asset: MDLAsset, fileName: String) throws {
+
         guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw NSError(domain: "com.original.creatingLidarModel", code: 153)
         }
         let folderName = "OBJ_FILES"
         let folderURL = directory.appendingPathComponent(folderName)
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
-        let url = folderURL.appendingPathComponent("\(fileName.isEmpty ? UUID().uuidString : fileName).obj")
-        print("Exporting to: \(url)")
-        do {
-            try asset.export(to: url)
-            print("Object saved successfully at \(url)")
-        } catch {
-            print("Export error: \(error)")
-        }
+        
+        let baseName = fileName.isEmpty ? UUID().uuidString : fileName
+        let url = folderURL.appendingPathComponent("\(baseName).obj")
+        
+        try objString.write(to: url, atomically: true, encoding: .utf8)
+        print("Manual export saved successfully at \(url)")
     }
+}
+
+class ExportViewModel: NSObject, ObservableObject, ARSessionDelegate {
+    // This class is no longer used for OBJ export but may be kept for other purposes.
 }
