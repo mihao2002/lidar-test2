@@ -9,6 +9,14 @@ import SwiftUI
 import RealityKit
 import ARKit
 
+final class SharedARView {
+    static let instance: ARView = {
+        let arView = ARView(frame: .zero)
+        // Any one-time configuration can go here
+        return arView
+    }()
+}
+
 struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedExportRequest: Bool
     @Binding var submittedName: String
@@ -16,51 +24,32 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var shouldSmoothMesh: Bool
     //@Binding var showMeshOverlay: Bool
     @Binding var ceilingPointCount: Int
-    let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
     func makeUIView(context: Context) -> ARView {
+        let arView = SharedARView.instance
         arView.session.delegate = context.coordinator
         context.coordinator.arView = arView
+        // Only configure session if not already running
+        if arView.session.currentFrame == nil {
+            let configuration = buildConfigure()
+            arView.session.run(configuration)
+            addCoordinateAxes()
+        }
 
-        addCoordinateAxes()
-        
-        let configuration = buildConfigure()
-        arView.session.run(configuration)
-        
         return arView
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
-        if submittedExportRequest {
-            guard let meshAnchors = uiView.session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }), !meshAnchors.isEmpty else {
-                print("No mesh anchors to export.")
-                return
-            }
-            do {
-                print("Attempting manual export...")
-                try manualExport(meshAnchors: meshAnchors, fileName: submittedName)
-                // Reset the request to prevent re-exporting on every view update
-                DispatchQueue.main.async {
-                    self.submittedExportRequest = false
-                }
-            } catch {
-                print("Manual Export Failed: \(error)")
-            }
-        }
-        
-        if pauseSession {
-            uiView.session.pause()
-        }
+        // Do nothing, or only minimal updates
     }
     
     private func buildConfigure() -> ARWorldTrackingConfiguration {
         let configuration = ARWorldTrackingConfiguration()
         configuration.environmentTexturing = .automatic
-        arView.automaticallyConfigureSession = false
         configuration.sceneReconstruction = .meshWithClassification
         if type(of: configuration).supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics = .sceneDepth
