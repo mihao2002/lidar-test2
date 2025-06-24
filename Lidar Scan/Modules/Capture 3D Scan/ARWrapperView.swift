@@ -374,11 +374,14 @@ struct ARWrapperView: UIViewRepresentable {
             }
 
             if !newPoints.isEmpty {
-                // Combine the old hull's points with the new ones and recalculate, deduplicating first
-                let pointsToProcess = (self.ceilingPolygon + newPoints) //.uniquePoints(minDistance: 0.01)
+                print("[Ceiling] New points: \(newPoints.count), Old hull: \(self.ceilingPolygon.count)")
+                let pointsToProcess = (self.ceilingPolygon + newPoints).uniquePoints(minDistance: 0.05)
+                print("[Ceiling] Points to process for hull: \(pointsToProcess.count)")
                 self.ceilingPolygon = self.convexHull(points: pointsToProcess)
+                print("[Ceiling] Hull points after convex hull: \(self.ceilingPolygon.count)")
                 return true
             }
+
             return false
         }
 
