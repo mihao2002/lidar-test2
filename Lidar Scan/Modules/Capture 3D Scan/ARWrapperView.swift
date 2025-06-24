@@ -239,20 +239,8 @@ struct ARWrapperView: UIViewRepresentable {
                 vertexCountOffset += UInt32(geometry.vertices.count)
             }
 
-            // Denoising: Remove one triangle from each pair of nearly coplanar adjacent triangles
-            let angleThreshold: Float = .pi / 18 // 10 degrees
-            var toRemove = Set<Int>()
-            for (_, triIndices) in edgeToTriangles where triIndices.count == 2 {
-                let t0 = triIndices[0]
-                let t1 = triIndices[1]
-                let n0 = triangles[t0].normal
-                let n1 = triangles[t1].normal
-                let dot = simd_dot(simd_normalize(n0), simd_normalize(n1))
-                if dot > cos(angleThreshold) {
-                    toRemove.insert(t1)
-                }
-            }
-            for (i, tri) in triangles.enumerated() where !toRemove.contains(i) {
+            // Denoising logic removed, now collecting all triangle indices
+            for tri in triangles {
                 allIndices.append(contentsOf: tri.indices)
             }
 
