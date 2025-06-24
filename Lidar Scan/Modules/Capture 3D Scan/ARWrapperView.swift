@@ -401,7 +401,97 @@ struct ARWrapperView: UIViewRepresentable {
             }
             
             // removeLast() to avoid duplicating the start/end points.
-            return lower.dropLast() + upper.dropLast()
+            let hull = lower.dropLast() + upper.dropLast()
+            
+            // Remove short sides from the polygon
+            return removeShortSides(from: hull, minSideLength: 0.2) // 20cm = 0.2m
+        }
+        
+        // Remove sides shorter than minSideLength by extending adjacent sides
+        private func removeShortSides(from polygon: [SIMD2<Float>], minSideLength: Float) -> [SIMD2<Float>] {
+            guard polygon.count >= 4 else { return polygon } // Need at least 4 points to remove a side
+            
+            var result = polygon
+            var modified = true
+            
+            while modified && result.count >= 4 {
+                modified = false
+                
+                for i in 0..<result.count {
+                    let current = result[i]
+                    let next = result[(i + 1) % result.count]
+                    let sideLength = simd_distance(current, next)
+                    
+                    if sideLength < minSideLength {
+                        // Find the previous and next points
+                        let prev = result[(i - 1 + result.count) % result.count]
+                        let nextNext = result[(i + 2) % result.count]
+                        
+                        // Calculate the direction vectors
+                        let prevToCurrent = normalize(current - prev)
+                        let nextToNextNext = normalize(nextNext - next)
+                        
+                        // Find intersection of extended lines
+                        if let intersection = lineIntersection(
+                            line1Start: prev,
+                            line1End: current,
+                            line2Start: next,
+                            line2End: nextNext
+                        ) {
+                            // Replace the short side with the intersection point
+                            result[i] = intersection
+                            result.remove(at: (i + 1) % result.count)
+                            
+                            // Adjust index if we removed a point before current position
+                            if (i + 1) % result.count <= i {
+                                // No adjustment needed
+                            }
+                            
+                            modified = true
+                            break // Restart the loop since we modified the polygon
+                        }
+                    }
+                }
+            }
+            
+            return result
+        }
+        
+        // Calculate intersection of two lines
+        private func lineIntersection(line1Start: SIMD2<Float>, line1End: SIMD2<Float>, 
+                                    line2Start: SIMD2<Float>, line2End: SIMD2<Float>) -> SIMD2<Float>? {
+            let p1 = line1Start
+            let p2 = line1End
+            let p3 = line2Start
+            let p4 = line2End
+            
+            let denominator = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x)
+            
+            // Lines are parallel
+            if abs(denominator) < 1e-6 {
+                return nil
+            }
+            
+            let t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / denominator
+            
+            // Check if intersection is within reasonable bounds
+            if t < -10 || t > 10 {
+                return nil
+            }
+            
+            let intersection = SIMD2<Float>(
+                p1.x + t * (p2.x - p1.x),
+                p1.y + t * (p2.y - p1.y)
+            )
+            
+            return intersection
+        }
+        
+        // Helper function to normalize a 2D vector
+        private func normalize(_ vector: SIMD2<Float>) -> SIMD2<Float> {
+            let length = simd_length(vector)
+            guard length > 1e-6 else { return SIMD2<Float>(0, 0) }
+            return vector / length
         }
         
         // Helper for convex hull: 2D cross product.
