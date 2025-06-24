@@ -350,15 +350,34 @@ struct ARWrapperView: UIViewRepresentable {
             let vertexCount = geometry.vertices.count
             var newPoints: [SIMD2<Float>] = []
             let heightThreshold: Float = 0.1 // 10cm
-
+            
+            // Collect all world vertices to find the ceiling height
+            var worldVertices: [SIMD3<Float>] = []
             for i in 0..<vertexCount {
                 let localVertex = geometry.vertex(at: UInt32(i))
                 let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
+                worldVertices.append(worldVertex)
+            }
+            
+            // Find the ceiling height (highest points in the mesh)
+            if self.ceilingHeight == nil {
+                // Sort vertices by Y coordinate and take the top 10% as potential ceiling points
+                let sortedVertices = worldVertices.sorted { $0.y > $1.y }
+                let topCount = max(1, sortedVertices.count / 10) // Top 10%
+                let topVertices = Array(sortedVertices.prefix(topCount))
+                
+                // Calculate average height of top vertices
+                let totalHeight = topVertices.reduce(0) { $0 + $1.y }
+                self.ceilingHeight = totalHeight / Float(topVertices.count)
+                
+                print("[Ceiling] Detected ceiling height: \(self.ceilingHeight!)")
+            }
+            
+            guard let ceilingY = self.ceilingHeight else { return false }
+            
+            // Find points near the ceiling height
+            for worldVertex in worldVertices {
                 let y = worldVertex.y
-                if self.ceilingHeight == nil {
-                    self.ceilingHeight = y
-                }
-                guard let ceilingY = self.ceilingHeight else { continue }
                 if abs(y - ceilingY) < heightThreshold {
                     newPoints.append(worldVertex.xz)
                 }
