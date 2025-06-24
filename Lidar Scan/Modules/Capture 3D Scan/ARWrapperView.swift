@@ -401,7 +401,7 @@ struct ARWrapperView: UIViewRepresentable {
             }
             
             // removeLast() to avoid duplicating the start/end points.
-            let hull = lower.dropLast() + upper.dropLast()
+            let hull = Array(lower.dropLast() + upper.dropLast())
             
             // Remove short sides from the polygon
             return removeShortSides(from: hull, minSideLength: 0.2) // 20cm = 0.2m
