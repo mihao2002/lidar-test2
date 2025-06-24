@@ -17,7 +17,10 @@ struct ARWrapperView: UIViewRepresentable {
     let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        let coordinator = Coordinator(parent: self)
+        // Start the timer after the coordinator is fully initialized.
+        coordinator.startCeilingMeshTimer()
+        return coordinator
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -141,11 +144,24 @@ struct ARWrapperView: UIViewRepresentable {
         weak var arView: ARView?
         var customMeshEntity: ModelEntity?
         var smoothedMeshEntity: ModelEntity?
+        var ceilingMeshEntity: ModelEntity?
         var originalPositions: [SIMD3<Float>] = []
         var originalIndices: [UInt32] = []
+        
+        // --- Properties for Ceiling Detection ---
+        private var pendingCeilingFaces: [(vertices: [SIMD3<Float>], normal: SIMD3<Float>, center: SIMD3<Float>)] = []
+        private let pendingCeilingFacesQueue = DispatchQueue(label: "pendingCeilingFacesQueue")
+        private var latestCeilingMesh: ([SIMD3<Float>], [UInt32])?
+        private let latestCeilingMeshQueue = DispatchQueue(label: "latestCeilingMeshQueue")
+        private var ceilingMeshTimer: Timer?
+        private let ceilingHeightTolerance: Float = 0.3 // 30cm tolerance for ceiling height variation
 
         init(parent: ARWrapperView) {
             self.parent = parent
+        }
+
+        deinit {
+            ceilingMeshTimer?.invalidate()
         }
 
         func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
@@ -162,6 +178,8 @@ struct ARWrapperView: UIViewRepresentable {
                     } else {
                         self.showOriginalMesh(meshResource)
                     }
+                    // Update the ceiling mesh if new data is available
+                    self.updateCeilingEntityIfNeeded()
                 }
             }
         }
@@ -201,6 +219,9 @@ struct ARWrapperView: UIViewRepresentable {
                     let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
                     allVertices.append(worldVertex)
                 }
+                
+                // Detect ceiling faces to be processed in the background
+                detectCeilingFaces(geometry: geometry, transform: transform)
                 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
@@ -263,6 +284,10 @@ struct ARWrapperView: UIViewRepresentable {
             if let smoothed = smoothedMeshEntity {
                 smoothed.removeFromParent()
                 smoothedMeshEntity = nil
+            }
+            if let ceiling = ceilingMeshEntity {
+                ceiling.removeFromParent()
+                ceilingMeshEntity = nil
             }
             if let entity = customMeshEntity {
                 entity.model?.mesh = resource
@@ -328,6 +353,158 @@ struct ARWrapperView: UIViewRepresentable {
             descriptor.primitives = .triangles(indices)
             let smoothedMesh = (try? MeshResource.generate(from: [descriptor])) ?? makeEmptyMesh()
             return (smoothedMesh, indices)
+        }
+
+        // --- Ceiling Detection Methods ---
+
+        public func startCeilingMeshTimer() {
+            // This timer triggers the background processing of collected ceiling faces.
+            self.ceilingMeshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.processCeilingFacesInBackground()
+            }
+        }
+
+        private func detectCeilingFaces(geometry: ARMeshGeometry, transform: simd_float4x4) {
+            // This function runs in-line with the mesh update to identify potential ceiling faces.
+            let faces = geometry.faces
+            guard faces.primitiveType == .triangle else { return }
+
+            if faces.bytesPerIndex == 4 { // UInt32
+                let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                for i in 0..<faces.count {
+                    let base = i * faces.indexCountPerPrimitive
+                    let v0 = geometry.vertex(at: pointer[base])
+                    let v1 = geometry.vertex(at: pointer[base + 1])
+                    let v2 = geometry.vertex(at: pointer[base + 2])
+                    processCeilingFace(v0: v0, v1: v1, v2: v2, transform: transform)
+                }
+            } else { // UInt16
+                let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
+                for i in 0..<faces.count {
+                    let base = i * faces.indexCountPerPrimitive
+                    let v0 = geometry.vertex(at: UInt32(pointer[base]))
+                    let v1 = geometry.vertex(at: UInt32(pointer[base + 1]))
+                    let v2 = geometry.vertex(at: UInt32(pointer[base + 2]))
+                    processCeilingFace(v0: v0, v1: v1, v2: v2, transform: transform)
+                }
+            }
+        }
+
+        private func processCeilingFace(v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>, transform: simd_float4x4) {
+            // This function calculates the normal and adds the face to a pending queue if it's a ceiling candidate.
+            let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
+            let worldV1 = (transform * SIMD4<Float>(v1, 1)).xyz
+            let worldV2 = (transform * SIMD4<Float>(v2, 1)).xyz
+
+            let edge1 = worldV1 - worldV0
+            let edge2 = worldV2 - worldV0
+            let normal = normalize(cross(edge1, edge2))
+
+            // A downward-pointing normal is a strong indicator of a ceiling surface.
+            if normal.y < -0.3 {
+                let center = (worldV0 + worldV1 + worldV2) / 3.0
+                let faceData = (vertices: [worldV0, worldV1, worldV2], normal: normal, center: center)
+                // Add the face data to the queue for background processing.
+                pendingCeilingFacesQueue.async {
+                    self.pendingCeilingFaces.append(faceData)
+                }
+            }
+        }
+
+        private func processCeilingFacesInBackground() {
+            // This function moves the collected faces to a local array and kicks off the mesh building.
+            pendingCeilingFacesQueue.async {
+                let faces = self.pendingCeilingFaces
+                self.pendingCeilingFaces.removeAll()
+                
+                guard !faces.isEmpty else { return }
+                
+                let (vertices, indices) = self.buildCeilingMesh(from: faces)
+                
+                // Once the mesh is built, store it for the main thread to pick up.
+                self.latestCeilingMeshQueue.async {
+                    self.latestCeilingMesh = (vertices, indices)
+                }
+            }
+        }
+
+        private func buildCeilingMesh(from faces: [(vertices: [SIMD3<Float>], normal: SIMD3<Float>, center: SIMD3<Float>)]) -> ([SIMD3<Float>], [UInt32]) {
+            // This function identifies the primary ceiling height and builds a mesh from faces in that cluster.
+            guard !faces.isEmpty else { return ([], []) }
+
+            let heights = faces.map { $0.center.y }
+            let sortedHeights = heights.sorted()
+            
+            // Use a sliding window to find the densest cluster of heights.
+            var bestCount = 0
+            var bestStart = 0
+            for i in 0..<sortedHeights.count {
+                let startHeight = sortedHeights[i]
+                let endHeight = startHeight + ceilingHeightTolerance
+                let count = sortedHeights[i...].prefix { $0 <= endHeight }.count
+                if count > bestCount {
+                    bestCount = count
+                    bestStart = i
+                }
+            }
+
+            if bestCount == 0 || bestStart >= sortedHeights.count { return ([], []) }
+            
+            let ceilingBase = sortedHeights[bestStart]
+            let ceilingMax = ceilingBase + ceilingHeightTolerance
+            let ceilingFaces = faces.filter { $0.center.y >= ceilingBase && $0.center.y <= ceilingMax }
+            if ceilingFaces.isEmpty { return ([], []) }
+
+            var ceilingVertices: [SIMD3<Float>] = []
+            var ceilingIndices: [UInt32] = []
+
+            // Create a new mesh from the filtered ceiling faces.
+            for face in ceilingFaces {
+                let baseIndex = UInt32(ceilingVertices.count)
+                ceilingVertices.append(contentsOf: face.vertices)
+                ceilingIndices.append(baseIndex)
+                ceilingIndices.append(baseIndex + 1)
+                ceilingIndices.append(baseIndex + 2)
+            }
+
+            return (ceilingVertices, ceilingIndices)
+        }
+
+        private func updateCeilingEntityIfNeeded() {
+            // This function checks if a new ceiling mesh is available and, if so, dispatches an update on the main thread.
+            latestCeilingMeshQueue.sync {
+                if let (vertices, indices) = self.latestCeilingMesh {
+                    DispatchQueue.main.async {
+                        self.updateCeilingEntityWith(vertices: vertices, indices: indices)
+                    }
+                    self.latestCeilingMesh = nil
+                }
+            }
+        }
+
+        private func updateCeilingEntityWith(vertices: [SIMD3<Float>], indices: [UInt32]) {
+            // This function runs on the main thread to safely update the RealityKit scene.
+            guard !vertices.isEmpty, !indices.isEmpty else { return }
+            
+            var descriptor = MeshDescriptor()
+            descriptor.positions = MeshBuffer(vertices)
+            descriptor.primitives = .triangles(indices)
+            
+            do {
+                let mesh = try MeshResource.generate(from: [descriptor])
+                if let entity = ceilingMeshEntity {
+                    entity.model?.mesh = mesh
+                } else {
+                    let material = SimpleMaterial(color: .orange, isMetallic: false)
+                    let newEntity = ModelEntity(mesh: mesh, materials: [material])
+                    let anchor = AnchorEntity(world: matrix_identity_float4x4)
+                    anchor.addChild(newEntity)
+                    arView?.scene.addAnchor(anchor)
+                    ceilingMeshEntity = newEntity
+                }
+            } catch {
+                print("Debug: Failed to update/create ceiling mesh: \(error)")
+            }
         }
     }
 }
