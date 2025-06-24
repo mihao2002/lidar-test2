@@ -377,7 +377,7 @@ struct ARWrapperView: UIViewRepresentable {
                 print("[Ceiling] New points: \(newPoints.count), Old hull: \(self.ceilingPolygon.count)")
                 let pointsToProcess = (self.ceilingPolygon + newPoints).uniquePoints(minDistance: 0.05)
                 print("[Ceiling] Points to process for hull: \(pointsToProcess.count)")
-                self.ceilingPolygon = self.convexHull(points: pointsToProcess)
+                //self.ceilingPolygon = self.convexHull(points: pointsToProcess)
                 print("[Ceiling] Hull points after convex hull: \(self.ceilingPolygon.count)")
                 return true
             }
