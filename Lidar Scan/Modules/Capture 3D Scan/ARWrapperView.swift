@@ -148,7 +148,6 @@ struct ARWrapperView: UIViewRepresentable {
         var originalIndices: [UInt32] = []
 
         // --- New properties for Convex Hull Ceiling Detection ---
-        private var ceilingPoints: [SIMD2<Float>] = [] // All detected ceiling points
         private var ceilingPolygon: [SIMD2<Float>] = [] // The calculated convex hull
         private var ceilingHeight: Float?
 
@@ -358,7 +357,7 @@ struct ARWrapperView: UIViewRepresentable {
         private func detectAndUpdateCeiling(geometry: ARMeshGeometry, transform: simd_float4x4) -> Bool {
             let faces = geometry.faces
             guard faces.primitiveType == .triangle else { return false }
-            var newPointsAdded = false
+            var newPoints: [SIMD2<Float>] = []
 
             let processFace = { (v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>) in
                 let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
@@ -375,8 +374,7 @@ struct ARWrapperView: UIViewRepresentable {
                     
                     guard abs(faceCenterY - self.ceilingHeight!) < 0.3 else { return }
 
-                    self.ceilingPoints.append(contentsOf: [worldV0.xz, worldV1.xz, worldV2.xz])
-                    newPointsAdded = true
+                    newPoints.append(contentsOf: [worldV0.xz, worldV1.xz, worldV2.xz])
                 }
             }
 
@@ -394,11 +392,13 @@ struct ARWrapperView: UIViewRepresentable {
                 }
             }
 
-            if newPointsAdded {
-                // Re-calculate the convex hull if new points were added.
-                self.ceilingPolygon = self.convexHull(points: self.ceilingPoints)
+            if !newPoints.isEmpty {
+                // Combine the old hull's points with the new ones and recalculate.
+                let pointsToProcess = self.ceilingPolygon + newPoints
+                self.ceilingPolygon = self.convexHull(points: pointsToProcess)
+                return true
             }
-            return newPointsAdded
+            return false
         }
 
         private func convexHull(points: [SIMD2<Float>]) -> [SIMD2<Float>] {
