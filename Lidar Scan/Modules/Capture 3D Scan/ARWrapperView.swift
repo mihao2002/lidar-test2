@@ -169,7 +169,7 @@ struct ARWrapperView: UIViewRepresentable {
                     self.originalPositions = positions
                     self.originalIndices = indices
 
-                    if self.parent.showMeshOverlay {
+                    if !self.parent.showMeshOverlay {
                         if self.parent.shouldSmoothMesh {
                             self.showSmoothedMesh()
                         } else {
@@ -188,7 +188,7 @@ struct ARWrapperView: UIViewRepresentable {
 
                     // If the ceiling polygon was updated, redraw the ceiling mesh
                     if polygonUpdated {
-                        self.updateCeilingEntityFromPolygon()
+                        //self.updateCeilingEntityFromPolygon()
                         // Update the point count on the main UI
                         self.parent.ceilingPointCount = self.ceilingPolygon.count
                     }
