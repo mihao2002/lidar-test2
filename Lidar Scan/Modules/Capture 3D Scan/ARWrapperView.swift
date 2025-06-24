@@ -158,7 +158,7 @@ struct ARWrapperView: UIViewRepresentable {
                     self.originalPositions = positions
                     self.originalIndices = indices
 
-                    if !self.parent.showMeshOverlay {
+                    if self.parent.showMeshOverlay {
                         if self.parent.shouldSmoothMesh {
                             self.showSmoothedMesh()
                         } else {
