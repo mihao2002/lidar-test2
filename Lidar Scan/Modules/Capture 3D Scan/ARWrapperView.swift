@@ -14,7 +14,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedName: String
     @Binding var pauseSession: Bool
     @Binding var shouldSmoothMesh: Bool
-    @Binding var showMeshOverlay: Bool
+    //@Binding var showMeshOverlay: Bool
     @Binding var ceilingPointCount: Int
     let arView = ARView(frame: .zero)
 
@@ -169,7 +169,8 @@ struct ARWrapperView: UIViewRepresentable {
                     self.originalPositions = positions
                     self.originalIndices = indices
 
-                    if !self.parent.showMeshOverlay {
+                    self.showOriginalMesh(meshResource)
+                    /*if !self.parent.showMeshOverlay {
                         if self.parent.shouldSmoothMesh {
                             self.showSmoothedMesh()
                         } else {
@@ -184,7 +185,7 @@ struct ARWrapperView: UIViewRepresentable {
                             entity.removeFromParent()
                             self.smoothedMeshEntity = nil
                         }
-                    }
+                    }*/
 
                     // If the ceiling polygon was updated, redraw the ceiling mesh
                     if polygonUpdated {

@@ -23,7 +23,7 @@ struct Capture3DScanView: View {
                               submittedName: $submittedName,
                               pauseSession: $pauseSession,
                               shouldSmoothMesh: $shouldSmoothMesh,
-                              showMeshOverlay: $showMeshOverlay,
+                              //showMeshOverlay: $showMeshOverlay,
                               ceilingPointCount: $ceilingPointCount)
                 .ignoresSafeArea()
                 VStack {
