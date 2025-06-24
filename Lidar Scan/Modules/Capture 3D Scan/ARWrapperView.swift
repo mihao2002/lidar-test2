@@ -14,6 +14,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var submittedName: String
     @Binding var pauseSession: Bool
     @Binding var shouldSmoothMesh: Bool
+    @Binding var showMeshOverlay: Bool
     let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
@@ -173,11 +174,26 @@ struct ARWrapperView: UIViewRepresentable {
                 DispatchQueue.main.async {
                     self.originalPositions = positions
                     self.originalIndices = indices
-                    if self.parent.shouldSmoothMesh {
-                        self.showSmoothedMesh()
+
+                    if self.parent.showMeshOverlay {
+                        // If the overlay should be shown, run the existing logic.
+                        if self.parent.shouldSmoothMesh {
+                            self.showSmoothedMesh()
+                        } else {
+                            self.showOriginalMesh(meshResource)
+                        }
                     } else {
-                        self.showOriginalMesh(meshResource)
+                        // If the overlay should be hidden, remove the entities.
+                        if let entity = self.customMeshEntity {
+                            entity.removeFromParent()
+                            self.customMeshEntity = nil
+                        }
+                        if let entity = self.smoothedMeshEntity {
+                            entity.removeFromParent()
+                            self.smoothedMeshEntity = nil
+                        }
                     }
+
                     // Update the ceiling mesh if new data is available
                     self.updateCeilingEntityIfNeeded()
                 }

@@ -13,13 +13,15 @@ struct Capture3DScanView: View {
     @State var submittedName = ""
     @State var pauseSession: Bool = false
     @State var shouldSmoothMesh: Bool = false
+    @State var showMeshOverlay: Bool = false
     var body: some View {
         NavigationView {
             ZStack(alignment: .bottom) {
                 ARWrapperView(submittedExportRequest: $submittedExportRequest,
                               submittedName: $submittedName,
                               pauseSession: $pauseSession,
-                              shouldSmoothMesh: $shouldSmoothMesh)
+                              shouldSmoothMesh: $shouldSmoothMesh,
+                              showMeshOverlay: $showMeshOverlay)
                 .ignoresSafeArea()
                 VStack {
                     HStack {
@@ -54,6 +56,16 @@ struct Capture3DScanView: View {
                             .frame(width: UIScreen.main.bounds.width-120)
                             .padding()
                             .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    Button {
+                        showMeshOverlay.toggle()
+                    } label: {
+                        Text(showMeshOverlay ? "Hide Overlay" : "Show Overlay")
+                            .frame(width: UIScreen.main.bounds.width-120)
+                            .padding()
+                            .background(Color.blue.opacity(0.7))
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }
