@@ -152,6 +152,9 @@ struct ARWrapperView: UIViewRepresentable {
         private var ceilingHeight: Float?
         private let pointInPolygonProximity: Float = 0.1 // 10cm tolerance
 
+        // A serial queue to ensure mesh processing is not concurrent.
+        private let meshProcessingQueue = DispatchQueue(label: "com.lidar-test.meshProcessingQueue")
+
         init(parent: ARWrapperView) {
             self.parent = parent
         }
@@ -160,7 +163,7 @@ struct ARWrapperView: UIViewRepresentable {
             let meshAnchors = session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }) ?? []
             if meshAnchors.isEmpty { return }
 
-            DispatchQueue.global().async {
+            meshProcessingQueue.async {
                 let (meshResource, positions, indices, polygonUpdated) = self.generateLiveMeshAndStore(meshAnchors)
                 DispatchQueue.main.async {
                     self.originalPositions = positions
