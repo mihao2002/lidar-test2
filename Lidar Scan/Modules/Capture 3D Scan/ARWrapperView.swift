@@ -37,7 +37,7 @@ struct ARWrapperView: UIViewRepresentable {
         if arView.session.currentFrame == nil {
             let configuration = buildConfigure()
             arView.session.run(configuration)
-            addCoordinateAxes()
+            addCoordinateAxes(to: arView)
         }
 
         return arView
@@ -57,7 +57,7 @@ struct ARWrapperView: UIViewRepresentable {
         return configuration
     }
     
-    private func addCoordinateAxes() {
+    private func addCoordinateAxes(to arView: ARView) {
         let axisLength: Float = 0.1
         let axisThickness: Float = 0.002
         
