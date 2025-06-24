@@ -159,7 +159,8 @@ struct ARWrapperView: UIViewRepresentable {
         }
 
         func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-            let meshAnchors = session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }) ?? []
+            // Only process anchors that have been updated in this frame.
+            let meshAnchors = anchors.compactMap { $0 as? ARMeshAnchor }
             if meshAnchors.isEmpty { return }
 
             meshProcessingQueue.async {
@@ -229,9 +230,9 @@ struct ARWrapperView: UIViewRepresentable {
                     allVertices.append(worldVertex)
                 }
 
-                //if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
-                //    polygonUpdated = true
-                //}
+                if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
+                    polygonUpdated = true
+                }
 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
