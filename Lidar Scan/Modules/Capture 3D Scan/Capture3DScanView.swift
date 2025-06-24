@@ -14,6 +14,8 @@ struct Capture3DScanView: View {
     @State var pauseSession: Bool = false
     @State var shouldSmoothMesh: Bool = false
     @State var showMeshOverlay: Bool = false
+    @State private var ceilingPointCount: Int = 0
+
     var body: some View {
         NavigationView {
             ZStack(alignment: .bottom) {
@@ -21,7 +23,8 @@ struct Capture3DScanView: View {
                               submittedName: $submittedName,
                               pauseSession: $pauseSession,
                               shouldSmoothMesh: $shouldSmoothMesh,
-                              showMeshOverlay: $showMeshOverlay)
+                              showMeshOverlay: $showMeshOverlay,
+                              ceilingPointCount: $ceilingPointCount)
                 .ignoresSafeArea()
                 VStack {
                     HStack {
@@ -37,7 +40,13 @@ struct Capture3DScanView: View {
                         }
                         .frame(width: 40, height: 40)
                         Spacer()
+                        Text("Ceiling Points: \(ceilingPointCount)")
+                            .padding()
+                            .background(Color.black.opacity(0.5))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
                     }.padding(.leading, 40)
+                    .padding(.trailing, 20)
                     Spacer()
                     Button {
                         pauseSession = true

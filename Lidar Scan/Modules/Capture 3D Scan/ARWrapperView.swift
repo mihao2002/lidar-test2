@@ -15,6 +15,7 @@ struct ARWrapperView: UIViewRepresentable {
     @Binding var pauseSession: Bool
     @Binding var shouldSmoothMesh: Bool
     @Binding var showMeshOverlay: Bool
+    @Binding var ceilingPointCount: Int
     let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
@@ -185,6 +186,8 @@ struct ARWrapperView: UIViewRepresentable {
                     // If the ceiling polygon was updated, redraw the ceiling mesh
                     if polygonUpdated {
                         self.updateCeilingEntityFromPolygon()
+                        // Update the point count on the main UI
+                        self.parent.ceilingPointCount = self.ceilingPolygon.count
                     }
                 }
             }
