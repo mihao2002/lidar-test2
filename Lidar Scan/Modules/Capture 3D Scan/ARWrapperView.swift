@@ -18,10 +18,7 @@ struct ARWrapperView: UIViewRepresentable {
     let arView = ARView(frame: .zero)
 
     func makeCoordinator() -> Coordinator {
-        let coordinator = Coordinator(parent: self)
-        // Start the timer after the coordinator is fully initialized.
-        coordinator.startCeilingMeshTimer()
-        return coordinator
+        Coordinator(parent: self)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -148,42 +145,33 @@ struct ARWrapperView: UIViewRepresentable {
         var ceilingMeshEntity: ModelEntity?
         var originalPositions: [SIMD3<Float>] = []
         var originalIndices: [UInt32] = []
-        
-        // --- Properties for Ceiling Detection ---
-        private var pendingCeilingFaces: [(vertices: [SIMD3<Float>], normal: SIMD3<Float>, center: SIMD3<Float>)] = []
-        private let pendingCeilingFacesQueue = DispatchQueue(label: "pendingCeilingFacesQueue")
-        private var latestCeilingMesh: ([SIMD3<Float>], [UInt32])?
-        private let latestCeilingMeshQueue = DispatchQueue(label: "latestCeilingMeshQueue")
-        private var ceilingMeshTimer: Timer?
-        private let ceilingHeightTolerance: Float = 0.3 // 30cm tolerance for ceiling height variation
+
+        // --- New properties for Concave Polygon Ceiling Detection ---
+        private var ceilingPolygon: [SIMD2<Float>] = []
+        private var ceilingHeight: Float?
+        private let pointInPolygonProximity: Float = 0.1 // 10cm tolerance
 
         init(parent: ARWrapperView) {
             self.parent = parent
         }
 
-        deinit {
-            ceilingMeshTimer?.invalidate()
-        }
-
         func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
             let meshAnchors = session.currentFrame?.anchors.compactMap({ $0 as? ARMeshAnchor }) ?? []
             if meshAnchors.isEmpty { return }
-            
+
             DispatchQueue.global().async {
-                let (meshResource, positions, indices) = self.generateLiveMeshAndStore(meshAnchors)
+                let (meshResource, positions, indices, polygonUpdated) = self.generateLiveMeshAndStore(meshAnchors)
                 DispatchQueue.main.async {
                     self.originalPositions = positions
                     self.originalIndices = indices
 
                     if self.parent.showMeshOverlay {
-                        // If the overlay should be shown, run the existing logic.
                         if self.parent.shouldSmoothMesh {
                             self.showSmoothedMesh()
                         } else {
                             self.showOriginalMesh(meshResource)
                         }
                     } else {
-                        // If the overlay should be hidden, remove the entities.
                         if let entity = self.customMeshEntity {
                             entity.removeFromParent()
                             self.customMeshEntity = nil
@@ -194,8 +182,10 @@ struct ARWrapperView: UIViewRepresentable {
                         }
                     }
 
-                    // Update the ceiling mesh if new data is available
-                    self.updateCeilingEntityIfNeeded()
+                    // If the ceiling polygon was updated, redraw the ceiling mesh
+                    if polygonUpdated {
+                        self.updateCeilingEntityFromPolygon()
+                    }
                 }
             }
         }
@@ -205,22 +195,19 @@ struct ARWrapperView: UIViewRepresentable {
             let mesh = try! MeshResource.generate(from: [emptyDescriptor])
             return mesh
         }
-        
-        private func generateLiveMeshAndStore(_ meshAnchors: [ARMeshAnchor]) -> (MeshResource, [SIMD3<Float>], [UInt32]) {
+
+        private func generateLiveMeshAndStore(_ meshAnchors: [ARMeshAnchor]) -> (MeshResource, [SIMD3<Float>], [UInt32], Bool) {
             var allVertices: [SIMD3<Float>] = []
             var allIndices: [UInt32] = []
             var vertexCountOffset: UInt32 = 0
+            var polygonUpdated = false
+
             struct Edge: Hashable {
                 let a: UInt32
                 let b: UInt32
                 init(_ a: UInt32, _ b: UInt32) {
-                    if a < b {
-                        self.a = a
-                        self.b = b
-                    } else {
-                        self.a = b
-                        self.b = a
-                    }
+                    self.a = a < b ? a : b
+                    self.b = a < b ? b : a
                 }
             }
             var edgeToTriangles: [Edge: [Int]] = [:]
@@ -230,18 +217,20 @@ struct ARWrapperView: UIViewRepresentable {
                 let geometry = anchor.geometry
                 let transform = anchor.transform
 
+                let verticesStartIndex = allVertices.count
                 for i in 0..<geometry.vertices.count {
                     let localVertex = geometry.vertex(at: UInt32(i))
                     let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
                     allVertices.append(worldVertex)
                 }
-                
-                // Detect ceiling faces to be processed in the background
-                detectCeilingFaces(geometry: geometry, transform: transform)
-                
+
+                if detectAndUpdateCeilingPolygon(geometry: geometry, transform: transform) {
+                    polygonUpdated = true
+                }
+
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
-                    if faces.bytesPerIndex == 4 {
+                    if faces.bytesPerIndex == 4 { // UInt32
                         let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
                         for i in 0..<faces.count {
                             let base = i * faces.indexCountPerPrimitive
@@ -251,12 +240,8 @@ struct ARWrapperView: UIViewRepresentable {
                             let triIndices = [v0, v1, v2]
                             let normal = normalForTriangle(v0, v1, v2, allVertices)
                             triangles.append((triIndices, normal))
-                            for e in [(v0,v1), (v1,v2), (v2,v0)] {
-                                let edge = Edge(e.0, e.1)
-                                edgeToTriangles[edge, default: []].append(triangles.count-1)
-                            }
                         }
-                    } else {
+                    } else { // UInt16
                         let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
                         for i in 0..<faces.count {
                             let base = i * faces.indexCountPerPrimitive
@@ -266,17 +251,12 @@ struct ARWrapperView: UIViewRepresentable {
                             let triIndices = [v0, v1, v2]
                             let normal = normalForTriangle(v0, v1, v2, allVertices)
                             triangles.append((triIndices, normal))
-                            for e in [(v0,v1), (v1,v2), (v2,v0)] {
-                                let edge = Edge(e.0, e.1)
-                                edgeToTriangles[edge, default: []].append(triangles.count-1)
-                            }
                         }
                     }
                 }
                 vertexCountOffset += UInt32(geometry.vertices.count)
             }
 
-            // Denoising logic removed, now collecting all triangle indices
             for tri in triangles {
                 allIndices.append(contentsOf: tri.indices)
             }
@@ -285,17 +265,17 @@ struct ARWrapperView: UIViewRepresentable {
             descriptor.positions = MeshBuffer(allVertices)
             descriptor.primitives = .triangles(allIndices)
             let mesh = (try? MeshResource.generate(from: [descriptor])) ?? makeEmptyMesh()
-            return (mesh, allVertices, allIndices)
+            return (mesh, allVertices, allIndices, polygonUpdated)
         }
 
-        // Helper to compute normal for a triangle
         private func normalForTriangle(_ v0: UInt32, _ v1: UInt32, _ v2: UInt32, _ vertices: [SIMD3<Float>]) -> SIMD3<Float> {
+            guard Int(v0) < vertices.count, Int(v1) < vertices.count, Int(v2) < vertices.count else { return .zero }
             let p0 = vertices[Int(v0)]
             let p1 = vertices[Int(v1)]
             let p2 = vertices[Int(v2)]
             return simd_cross(p1 - p0, p2 - p0)
         }
-        
+
         private func showOriginalMesh(_ resource: MeshResource) {
             if let smoothed = smoothedMeshEntity {
                 smoothed.removeFromParent()
@@ -367,141 +347,130 @@ struct ARWrapperView: UIViewRepresentable {
             return (smoothedMesh, indices)
         }
 
-        // --- Ceiling Detection Methods ---
+        // --- New Ceiling Detection Methods ---
 
-        public func startCeilingMeshTimer() {
-            // This timer triggers the background processing of collected ceiling faces.
-            self.ceilingMeshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                self?.processCeilingFacesInBackground()
-            }
-        }
-
-        private func detectCeilingFaces(geometry: ARMeshGeometry, transform: simd_float4x4) {
-            // This function runs in-line with the mesh update to identify potential ceiling faces.
+        private func detectAndUpdateCeilingPolygon(geometry: ARMeshGeometry, transform: simd_float4x4) -> Bool {
             let faces = geometry.faces
-            guard faces.primitiveType == .triangle else { return }
+            guard faces.primitiveType == .triangle else { return false }
+            var polygonWasUpdated = false
 
-            if faces.bytesPerIndex == 4 { // UInt32
+            let processFace = { (v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>) in
+                let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
+                let worldV1 = (transform * SIMD4<Float>(v1, 1)).xyz
+                let worldV2 = (transform * SIMD4<Float>(v2, 1)).xyz
+                let normal = normalize(cross(worldV1 - worldV0, worldV2 - worldV0))
+
+                if normal.y < -0.5 { // Stricter downward normal check
+                    let faceCenterY = (worldV0.y + worldV1.y + worldV2.y) / 3.0
+                    if self.ceilingHeight == nil {
+                        self.ceilingHeight = faceCenterY
+                        self.ceilingPolygon = [worldV0.xz, worldV1.xz, worldV2.xz].uniquePoints(minDistance: self.pointInPolygonProximity)
+                        polygonWasUpdated = true
+                        return
+                    }
+
+                    guard abs(faceCenterY - self.ceilingHeight!) < 0.3 else { return }
+
+                    for vertex in [worldV0, worldV1, worldV2] {
+                        if self.addPointToConcavePolygon(point: vertex.xz) {
+                            polygonWasUpdated = true
+                        }
+                    }
+                }
+            }
+
+            if faces.bytesPerIndex == 4 {
                 let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
                 for i in 0..<faces.count {
                     let base = i * faces.indexCountPerPrimitive
-                    let v0 = geometry.vertex(at: pointer[base])
-                    let v1 = geometry.vertex(at: pointer[base + 1])
-                    let v2 = geometry.vertex(at: pointer[base + 2])
-                    processCeilingFace(v0: v0, v1: v1, v2: v2, transform: transform)
+                    processFace(geometry.vertex(at: pointer[base]), geometry.vertex(at: pointer[base + 1]), geometry.vertex(at: pointer[base + 2]))
                 }
-            } else { // UInt16
+            } else {
                 let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
                 for i in 0..<faces.count {
                     let base = i * faces.indexCountPerPrimitive
-                    let v0 = geometry.vertex(at: UInt32(pointer[base]))
-                    let v1 = geometry.vertex(at: UInt32(pointer[base + 1]))
-                    let v2 = geometry.vertex(at: UInt32(pointer[base + 2]))
-                    processCeilingFace(v0: v0, v1: v1, v2: v2, transform: transform)
+                    processFace(geometry.vertex(at: UInt32(pointer[base])), geometry.vertex(at: UInt32(pointer[base + 1])), geometry.vertex(at: UInt32(pointer[base + 2])))
                 }
             }
+            return polygonWasUpdated
         }
 
-        private func processCeilingFace(v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>, transform: simd_float4x4) {
-            // This function calculates the normal and adds the face to a pending queue if it's a ceiling candidate.
-            let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
-            let worldV1 = (transform * SIMD4<Float>(v1, 1)).xyz
-            let worldV2 = (transform * SIMD4<Float>(v2, 1)).xyz
+        private func addPointToConcavePolygon(point: SIMD2<Float>) -> Bool {
+            guard !isPointInsidePolygon(point: point, polygon: ceilingPolygon, tolerance: pointInPolygonProximity) else {
+                return false
+            }
 
-            let edge1 = worldV1 - worldV0
-            let edge2 = worldV2 - worldV0
-            let normal = normalize(cross(edge1, edge2))
+            var closestEdgeIndex = -1
+            var minDistance = Float.greatestFiniteMagnitude
 
-            // A downward-pointing normal is a strong indicator of a ceiling surface.
-            if normal.y < -0.3 {
-                let center = (worldV0 + worldV1 + worldV2) / 3.0
-                let faceData = (vertices: [worldV0, worldV1, worldV2], normal: normal, center: center)
-                // Add the face data to the queue for background processing.
-                pendingCeilingFacesQueue.async {
-                    self.pendingCeilingFaces.append(faceData)
+            for i in 0..<ceilingPolygon.count {
+                let p1 = ceilingPolygon[i]
+                let p2 = ceilingPolygon[(i + 1) % ceilingPolygon.count]
+                let edgeCenter = (p1 + p2) / 2
+                let distance = simd_distance(point, edgeCenter)
+                if distance < minDistance {
+                    minDistance = distance
+                    closestEdgeIndex = i
                 }
             }
+
+            if closestEdgeIndex != -1 {
+                ceilingPolygon.insert(point, at: closestEdgeIndex + 1)
+                return true
+            }
+            return false
         }
 
-        private func processCeilingFacesInBackground() {
-            // This function moves the collected faces to a local array and kicks off the mesh building.
-            pendingCeilingFacesQueue.async {
-                let faces = self.pendingCeilingFaces
-                self.pendingCeilingFaces.removeAll()
-                
-                guard !faces.isEmpty else { return }
-                
-                let (vertices, indices) = self.buildCeilingMesh(from: faces)
-                
-                // Once the mesh is built, store it for the main thread to pick up.
-                self.latestCeilingMeshQueue.async {
-                    self.latestCeilingMesh = (vertices, indices)
+        private func isPointInsidePolygon(point: SIMD2<Float>, polygon: [SIMD2<Float>], tolerance: Float) -> Bool {
+            guard !polygon.isEmpty else { return false }
+
+            // 1. Check proximity to edges first
+            for i in 0..<polygon.count {
+                let p1 = polygon[i]
+                let p2 = polygon[(i + 1) % polygon.count]
+                if distanceToEdge(point: point, edgeP1: p1, edgeP2: p2) < tolerance {
+                    return true
                 }
             }
+
+            // 2. Ray-casting algorithm
+            var crossings = 0
+            for i in 0..<polygon.count {
+                let p1 = polygon[i]
+                let p2 = polygon[(i + 1) % polygon.count]
+
+                if ((p1.y > point.y) != (p2.y > point.y)) &&
+                   (point.x < (p2.x - p1.x) * (point.y - p1.y) / (p2.y - p1.y) + p1.x) {
+                    crossings += 1
+                }
+            }
+            return (crossings % 2) == 1
         }
 
-        private func buildCeilingMesh(from faces: [(vertices: [SIMD3<Float>], normal: SIMD3<Float>, center: SIMD3<Float>)]) -> ([SIMD3<Float>], [UInt32]) {
-            // This function identifies the primary ceiling height and builds a mesh from faces in that cluster.
-            guard !faces.isEmpty else { return ([], []) }
+        private func distanceToEdge(point: SIMD2<Float>, edgeP1: SIMD2<Float>, edgeP2: SIMD2<Float>) -> Float {
+            let l2 = simd_distance_squared(edgeP1, edgeP2)
+            if l2 == 0.0 { return simd_distance(point, edgeP1) }
+            let t = max(0, min(1, simd_dot(point - edgeP1, edgeP2 - edgeP1) / l2))
+            let projection = edgeP1 + t * (edgeP2 - edgeP1)
+            return simd_distance(point, projection)
+        }
 
-            let heights = faces.map { $0.center.y }
-            let sortedHeights = heights.sorted()
+        private func updateCeilingEntityFromPolygon() {
+            guard ceilingPolygon.count >= 3, let height = ceilingHeight else { return }
+
+            let vertices = ceilingPolygon.map { SIMD3<Float>($0.x, height, $0.y) }
             
-            // Use a sliding window to find the densest cluster of heights.
-            var bestCount = 0
-            var bestStart = 0
-            for i in 0..<sortedHeights.count {
-                let startHeight = sortedHeights[i]
-                let endHeight = startHeight + ceilingHeightTolerance
-                let count = sortedHeights[i...].prefix { $0 <= endHeight }.count
-                if count > bestCount {
-                    bestCount = count
-                    bestStart = i
-                }
+            var indices: [UInt32] = []
+            for i in 1..<(vertices.count - 1) {
+                indices.append(0)
+                indices.append(UInt32(i))
+                indices.append(UInt32(i + 1))
             }
 
-            if bestCount == 0 || bestStart >= sortedHeights.count { return ([], []) }
-            
-            let ceilingBase = sortedHeights[bestStart]
-            let ceilingMax = ceilingBase + ceilingHeightTolerance
-            let ceilingFaces = faces.filter { $0.center.y >= ceilingBase && $0.center.y <= ceilingMax }
-            if ceilingFaces.isEmpty { return ([], []) }
-
-            var ceilingVertices: [SIMD3<Float>] = []
-            var ceilingIndices: [UInt32] = []
-
-            // Create a new mesh from the filtered ceiling faces.
-            for face in ceilingFaces {
-                let baseIndex = UInt32(ceilingVertices.count)
-                ceilingVertices.append(contentsOf: face.vertices)
-                ceilingIndices.append(baseIndex)
-                ceilingIndices.append(baseIndex + 1)
-                ceilingIndices.append(baseIndex + 2)
-            }
-
-            return (ceilingVertices, ceilingIndices)
-        }
-
-        private func updateCeilingEntityIfNeeded() {
-            // This function checks if a new ceiling mesh is available and, if so, dispatches an update on the main thread.
-            latestCeilingMeshQueue.sync {
-                if let (vertices, indices) = self.latestCeilingMesh {
-                    DispatchQueue.main.async {
-                        self.updateCeilingEntityWith(vertices: vertices, indices: indices)
-                    }
-                    self.latestCeilingMesh = nil
-                }
-            }
-        }
-
-        private func updateCeilingEntityWith(vertices: [SIMD3<Float>], indices: [UInt32]) {
-            // This function runs on the main thread to safely update the RealityKit scene.
-            guard !vertices.isEmpty, !indices.isEmpty else { return }
-            
-            var descriptor = MeshDescriptor()
+            var descriptor = MeshDescriptor(name: "ceiling")
             descriptor.positions = MeshBuffer(vertices)
             descriptor.primitives = .triangles(indices)
-            
+
             do {
                 let mesh = try MeshResource.generate(from: [descriptor])
                 if let entity = ceilingMeshEntity {
@@ -515,7 +484,7 @@ struct ARWrapperView: UIViewRepresentable {
                     ceilingMeshEntity = newEntity
                 }
             } catch {
-                print("Debug: Failed to update/create ceiling mesh: \(error)")
+                print("Failed to create ceiling mesh from polygon: \(error)")
             }
         }
     }
@@ -524,5 +493,23 @@ struct ARWrapperView: UIViewRepresentable {
 extension SIMD4 {
     var xyz: SIMD3<Scalar> {
         return SIMD3<Scalar>(x, y, z)
+    }
+}
+
+extension SIMD3 where Scalar == Float {
+    var xz: SIMD2<Float> {
+        SIMD2<Float>(x, z)
+    }
+}
+
+extension Array where Element == SIMD2<Float> {
+    func uniquePoints(minDistance: Float) -> [Element] {
+        var unique = [Element]()
+        for point in self {
+            if !unique.contains(where: { simd_distance($0, point) < minDistance }) {
+                unique.append(point)
+            }
+        }
+        return unique
     }
 }
