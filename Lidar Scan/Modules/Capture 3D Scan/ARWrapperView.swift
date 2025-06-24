@@ -188,7 +188,7 @@ struct ARWrapperView: UIViewRepresentable {
 
                     // If the ceiling polygon was updated, redraw the ceiling mesh
                     if polygonUpdated {
-                        //self.updateCeilingEntityFromPolygon()
+                        self.updateCeilingEntityFromPolygon()
                         // Update the point count on the main UI
                         self.parent.ceilingPointCount = self.ceilingPolygon.count
                     }
@@ -230,9 +230,9 @@ struct ARWrapperView: UIViewRepresentable {
                     allVertices.append(worldVertex)
                 }
 
-                //if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
-                //    polygonUpdated = true
-                //}
+                if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
+                    polygonUpdated = true
+                }
 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
@@ -356,46 +356,26 @@ struct ARWrapperView: UIViewRepresentable {
         // --- New Ceiling Detection Methods ---
 
         private func detectAndUpdateCeiling(geometry: ARMeshGeometry, transform: simd_float4x4) -> Bool {
-            let faces = geometry.faces
-            guard faces.primitiveType == .triangle else { return false }
+            let vertexCount = geometry.vertices.count
             var newPoints: [SIMD2<Float>] = []
+            let heightThreshold: Float = 0.1 // 10cm
 
-            let processFace = { (v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>) in
-                let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
-                let worldV1 = (transform * SIMD4<Float>(v1, 1)).xyz
-                let worldV2 = (transform * SIMD4<Float>(v2, 1)).xyz
-                let normal = normalize(cross(worldV1 - worldV0, worldV2 - worldV0))
-
-                if normal.y < -0.5 { // Stricter downward normal check
-                    let faceCenterY = (worldV0.y + worldV1.y + worldV2.y) / 3.0
-
-                    if self.ceilingHeight == nil {
-                        self.ceilingHeight = faceCenterY
-                    }
-                    
-                    guard abs(faceCenterY - self.ceilingHeight!) < 0.3 else { return }
-
-                    newPoints.append(contentsOf: [worldV0.xz, worldV1.xz, worldV2.xz])
+            for i in 0..<vertexCount {
+                let localVertex = geometry.vertex(at: UInt32(i))
+                let worldVertex = (transform * SIMD4<Float>(localVertex, 1)).xyz
+                let y = worldVertex.y
+                if self.ceilingHeight == nil {
+                    self.ceilingHeight = y
                 }
-            }
-
-            if faces.bytesPerIndex == 4 {
-                let pointer = faces.buffer.contents().bindMemory(to: UInt32.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                for i in 0..<faces.count {
-                    let base = i * faces.indexCountPerPrimitive
-                    processFace(geometry.vertex(at: pointer[base]), geometry.vertex(at: pointer[base + 1]), geometry.vertex(at: pointer[base + 2]))
-                }
-            } else {
-                let pointer = faces.buffer.contents().bindMemory(to: UInt16.self, capacity: faces.count * faces.indexCountPerPrimitive)
-                for i in 0..<faces.count {
-                    let base = i * faces.indexCountPerPrimitive
-                    processFace(geometry.vertex(at: UInt32(pointer[base])), geometry.vertex(at: UInt32(pointer[base + 1])), geometry.vertex(at: UInt32(pointer[base + 2])))
+                guard let ceilingY = self.ceilingHeight else { continue }
+                if abs(y - ceilingY) < heightThreshold {
+                    newPoints.append(worldVertex.xz)
                 }
             }
 
             if !newPoints.isEmpty {
-                // Combine the old hull's points with the new ones and recalculate.
-                let pointsToProcess = self.ceilingPolygon + newPoints
+                // Combine the old hull's points with the new ones and recalculate, deduplicating first
+                let pointsToProcess = (self.ceilingPolygon + newPoints).uniquePoints(minDistance: 0.01)
                 self.ceilingPolygon = self.convexHull(points: pointsToProcess)
                 return true
             }
