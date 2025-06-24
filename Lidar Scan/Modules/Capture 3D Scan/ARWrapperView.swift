@@ -190,7 +190,7 @@ struct ARWrapperView: UIViewRepresentable {
                     if polygonUpdated {
                         self.updateCeilingEntityFromPolygon()
                         // Update the point count on the main UI
-                        //self.parent.ceilingPointCount = self.ceilingPolygon.count
+                        self.parent.ceilingPointCount = self.ceilingPolygon.count
                     }
                 }
             }
