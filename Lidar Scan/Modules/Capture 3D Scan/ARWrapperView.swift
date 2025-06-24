@@ -230,9 +230,9 @@ struct ARWrapperView: UIViewRepresentable {
                     allVertices.append(worldVertex)
                 }
 
-                if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
-                    polygonUpdated = true
-                }
+                //if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
+                //    polygonUpdated = true
+                //}
 
                 let faces = geometry.faces
                 if faces.primitiveType == .triangle {
