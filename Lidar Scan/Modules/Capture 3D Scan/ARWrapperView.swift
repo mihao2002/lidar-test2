@@ -147,10 +147,10 @@ struct ARWrapperView: UIViewRepresentable {
         var originalPositions: [SIMD3<Float>] = []
         var originalIndices: [UInt32] = []
 
-        // --- New properties for Concave Polygon Ceiling Detection ---
-        private var ceilingPolygon: [SIMD2<Float>] = []
+        // --- New properties for Convex Hull Ceiling Detection ---
+        private var ceilingPoints: [SIMD2<Float>] = [] // All detected ceiling points
+        private var ceilingPolygon: [SIMD2<Float>] = [] // The calculated convex hull
         private var ceilingHeight: Float?
-        private let pointInPolygonProximity: Float = 0.1 // 10cm tolerance
 
         // A serial queue to ensure mesh processing is not concurrent.
         private let meshProcessingQueue = DispatchQueue(label: "com.lidar-test.meshProcessingQueue")
@@ -230,7 +230,7 @@ struct ARWrapperView: UIViewRepresentable {
                     allVertices.append(worldVertex)
                 }
 
-                if detectAndUpdateCeilingPolygon(geometry: geometry, transform: transform) {
+                if detectAndUpdateCeiling(geometry: geometry, transform: transform) {
                     polygonUpdated = true
                 }
 
@@ -355,10 +355,10 @@ struct ARWrapperView: UIViewRepresentable {
 
         // --- New Ceiling Detection Methods ---
 
-        private func detectAndUpdateCeilingPolygon(geometry: ARMeshGeometry, transform: simd_float4x4) -> Bool {
+        private func detectAndUpdateCeiling(geometry: ARMeshGeometry, transform: simd_float4x4) -> Bool {
             let faces = geometry.faces
             guard faces.primitiveType == .triangle else { return false }
-            var polygonWasUpdated = false
+            var newPointsAdded = false
 
             let processFace = { (v0: SIMD3<Float>, v1: SIMD3<Float>, v2: SIMD3<Float>) in
                 let worldV0 = (transform * SIMD4<Float>(v0, 1)).xyz
@@ -368,20 +368,15 @@ struct ARWrapperView: UIViewRepresentable {
 
                 if normal.y < -0.5 { // Stricter downward normal check
                     let faceCenterY = (worldV0.y + worldV1.y + worldV2.y) / 3.0
+
                     if self.ceilingHeight == nil {
                         self.ceilingHeight = faceCenterY
-                        self.ceilingPolygon = [worldV0.xz, worldV1.xz, worldV2.xz].uniquePoints(minDistance: self.pointInPolygonProximity)
-                        polygonWasUpdated = true
-                        return
                     }
-
+                    
                     guard abs(faceCenterY - self.ceilingHeight!) < 0.3 else { return }
 
-                    for vertex in [worldV0, worldV1, worldV2] {
-                        if self.addPointToConcavePolygon(point: vertex.xz) {
-                            polygonWasUpdated = true
-                        }
-                    }
+                    self.ceilingPoints.append(contentsOf: [worldV0.xz, worldV1.xz, worldV2.xz])
+                    newPointsAdded = true
                 }
             }
 
@@ -398,69 +393,47 @@ struct ARWrapperView: UIViewRepresentable {
                     processFace(geometry.vertex(at: UInt32(pointer[base])), geometry.vertex(at: UInt32(pointer[base + 1])), geometry.vertex(at: UInt32(pointer[base + 2])))
                 }
             }
-            return polygonWasUpdated
+
+            if newPointsAdded {
+                // Re-calculate the convex hull if new points were added.
+                self.ceilingPolygon = self.convexHull(points: self.ceilingPoints)
+            }
+            return newPointsAdded
         }
 
-        private func addPointToConcavePolygon(point: SIMD2<Float>) -> Bool {
-            guard !isPointInsidePolygon(point: point, polygon: ceilingPolygon, tolerance: pointInPolygonProximity) else {
-                return false
+        private func convexHull(points: [SIMD2<Float>]) -> [SIMD2<Float>] {
+            guard points.count > 2 else { return points }
+
+            // Sort points lexicographically
+            let sortedPoints = points.sorted { a, b in
+                a.x < b.x || (a.x == b.x && a.y < b.y)
             }
 
-            var closestEdgeIndex = -1
-            var minDistance = Float.greatestFiniteMagnitude
-
-            for i in 0..<ceilingPolygon.count {
-                let p1 = ceilingPolygon[i]
-                let p2 = ceilingPolygon[(i + 1) % ceilingPolygon.count]
-                let edgeCenter = (p1 + p2) / 2
-                let distance = simd_distance(point, edgeCenter)
-                if distance < minDistance {
-                    minDistance = distance
-                    closestEdgeIndex = i
+            var lower: [SIMD2<Float>] = []
+            for p in sortedPoints {
+                while lower.count >= 2 && crossProduct(o: lower[lower.count - 2], a: lower.last!, b: p) <= 0 {
+                    lower.removeLast()
                 }
+                lower.append(p)
             }
 
-            if closestEdgeIndex != -1 {
-                ceilingPolygon.insert(point, at: closestEdgeIndex + 1)
-                return true
-            }
-            return false
-        }
-
-        private func isPointInsidePolygon(point: SIMD2<Float>, polygon: [SIMD2<Float>], tolerance: Float) -> Bool {
-            guard !polygon.isEmpty else { return false }
-
-            // 1. Check proximity to edges first
-            for i in 0..<polygon.count {
-                let p1 = polygon[i]
-                let p2 = polygon[(i + 1) % polygon.count]
-                if distanceToEdge(point: point, edgeP1: p1, edgeP2: p2) < tolerance {
-                    return true
+            var upper: [SIMD2<Float>] = []
+            for p in sortedPoints.reversed() {
+                while upper.count >= 2 && crossProduct(o: upper[upper.count - 2], a: upper.last!, b: p) <= 0 {
+                    upper.removeLast()
                 }
+                upper.append(p)
             }
-
-            // 2. Ray-casting algorithm
-            var crossings = 0
-            for i in 0..<polygon.count {
-                let p1 = polygon[i]
-                let p2 = polygon[(i + 1) % polygon.count]
-
-                if ((p1.y > point.y) != (p2.y > point.y)) &&
-                   (point.x < (p2.x - p1.x) * (point.y - p1.y) / (p2.y - p1.y) + p1.x) {
-                    crossings += 1
-                }
-            }
-            return (crossings % 2) == 1
+            
+            // removeLast() to avoid duplicating the start/end points.
+            return lower.dropLast() + upper.dropLast()
         }
-
-        private func distanceToEdge(point: SIMD2<Float>, edgeP1: SIMD2<Float>, edgeP2: SIMD2<Float>) -> Float {
-            let l2 = simd_distance_squared(edgeP1, edgeP2)
-            if l2 == 0.0 { return simd_distance(point, edgeP1) }
-            let t = max(0, min(1, simd_dot(point - edgeP1, edgeP2 - edgeP1) / l2))
-            let projection = edgeP1 + t * (edgeP2 - edgeP1)
-            return simd_distance(point, projection)
+        
+        // Helper for convex hull: 2D cross product.
+        private func crossProduct(o: SIMD2<Float>, a: SIMD2<Float>, b: SIMD2<Float>) -> Float {
+            return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
         }
-
+        
         private func updateCeilingEntityFromPolygon() {
             guard ceilingPolygon.count >= 3, let height = ceilingHeight else { return }
 
