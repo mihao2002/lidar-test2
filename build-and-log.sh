@@ -24,6 +24,7 @@ echo "Using destination: $DESTINATION"
 LOGFILE="build.log"
 
 echo "📥 Pulling latest changes..."
+git reset --hard HEAD
 git pull
 
 echo "🛠️  Building $SCHEME ..."
@@ -31,6 +32,7 @@ echo "🛠️  Building $SCHEME ..."
 BUILD_OUTPUT=$(mktemp)
 
 xcodebuild -scheme "$SCHEME" -destination "$DESTINATION" clean build 2>&1 | tee "$BUILD_OUTPUT"
+EXIT_CODE=${PIPESTATUS[0]}
 
 #xcodebuild -scheme "room-plan" -destination "platform=iOS Simulator,name=iPhone 16" clean build 2>&1 | tee "$BUILD_OUTPUT"
 
@@ -42,3 +44,9 @@ rm "$BUILD_OUTPUT"
 
 
 echo "✅ Done. Log saved to $LOGFILE"
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "✅ Build succeeded"
+else
+    echo "❌ Build failed with exit code $EXIT_CODE"
+    cat $LOGFILE
+fi
