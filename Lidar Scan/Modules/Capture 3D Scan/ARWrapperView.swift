@@ -188,9 +188,9 @@ struct ARWrapperView: UIViewRepresentable {
 
                     // If the ceiling polygon was updated, redraw the ceiling mesh
                     if polygonUpdated {
-                        self.updateCeilingEntityFromPolygon()
+                        //self.updateCeilingEntityFromPolygon()
                         // Update the point count on the main UI
-                        self.parent.ceilingPointCount = self.ceilingPolygon.count
+                        self.parent.ceilingPointCount = self.parent.ceilingPointCount + 1 // self.ceilingPolygon.count
                     }
                 }
             }
