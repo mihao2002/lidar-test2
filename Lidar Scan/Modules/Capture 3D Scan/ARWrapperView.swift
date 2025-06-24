@@ -301,10 +301,6 @@ struct ARWrapperView: UIViewRepresentable {
                 smoothed.removeFromParent()
                 smoothedMeshEntity = nil
             }
-            if let ceiling = ceilingMeshEntity {
-                ceiling.removeFromParent()
-                ceilingMeshEntity = nil
-            }
             if let entity = customMeshEntity {
                 entity.model?.mesh = resource
             } else {
